@@ -1,0 +1,54 @@
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional
+
+
+@dataclass
+class FactorSpec:
+    """从论文中提取的因子假设规范"""
+    factor_name: str
+    description: str              # 自然语言描述因子含义
+    hypothesis: str               # 该因子预测什么、为什么有效
+    formula: str                  # 数学公式（LaTeX 或伪代码）
+    implementation_notes: str     # 实现要注意的关键细节
+    data_requirements: Dict       # {"freq": "daily", "fields": ["close","volume",...], "lookback_days": 252}
+    parameters: Dict              # {"lookback": 20, "decay": 0.5, ...}
+    source_paper: Dict            # {"title": ..., "url": ..., "date": ..., "abstract": ...}
+    variant_of: Optional[str] = None   # 若是延伸因子，填父因子名
+    extension_type: Optional[str] = None  # param_variation / formula_variation / combination
+
+
+@dataclass
+class FactorResult:
+    """因子评估结果"""
+    factor_name: str
+    ic_mean: float
+    icir: float
+    ic_decay_ratio: float
+    coverage: float
+    monthly_win_rate: float
+    max_correlation: float
+    status: str           # "PASS" | "FAIL"
+    fail_reason: str = ""
+    code_path: str = ""
+    ic_series: List[float] = field(default_factory=list)
+
+    @classmethod
+    def failed(cls, name: str, code_path: str, reason: str) -> "FactorResult":
+        return cls(
+            factor_name=name, ic_mean=0.0, icir=0.0, ic_decay_ratio=0.0,
+            coverage=0.0, monthly_win_rate=0.0, max_correlation=0.0,
+            status="FAIL", fail_reason=reason, code_path=code_path,
+        )
+
+
+@dataclass
+class FactorReport:
+    """最终因子研究报告"""
+    idea: str
+    papers_used: List[Dict]
+    total_extracted: int
+    total_tested: int
+    passed: List[FactorResult]
+    failed: List[FactorResult]
+    extensions_passed: List[FactorResult]
+    report_path: str = ""
