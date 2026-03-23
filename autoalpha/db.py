@@ -46,10 +46,26 @@ CREATE TABLE IF NOT EXISTS search_sessions (
     report_path       TEXT,
     created_at        TEXT
 );
+
+-- 经验记忆表（来自 FactorMiner RALPH 循环设计）
+-- 记录挖掘经历，供未来类似任务检索参考
+CREATE TABLE IF NOT EXISTS mining_experience (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    factor_name      TEXT,
+    hypothesis_type  TEXT,          -- 假设类型关键词（动量/反转/波动/流动性等）
+    outcome          TEXT,          -- PASS / FAIL
+    failure_mode     TEXT,          -- LOW_IC / LOW_ICIR / LOW_COVERAGE / REVERSAL / TIMEOUT / ENV
+    repair_applied   TEXT,          -- 尝试的修复措施描述
+    repair_outcome   TEXT,          -- 修复后结果：PASS / FAIL / NOT_TRIED
+    ic_mean          REAL,
+    key_insight      TEXT,          -- 本次挖掘的关键洞察（什么有效/无效）
+    created_at       TEXT
+);
 """)
 
+    # ── Factor library ─────────────────────────────────────────────────────────
+
     def save_factor(self, result, spec=None) -> int:
-        from .pipeline_state import FactorResult, FactorSpec
         with self._conn() as c:
             cur = c.execute("""
 INSERT INTO factor_library
@@ -95,6 +111,8 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 pass
         return result
 
+    # ── Sessions ───────────────────────────────────────────────────────────────
+
     def save_session(self, idea: str, papers_found: int,
                      factors_extracted: int, factors_passed: int,
                      report_path: str = "") -> int:
@@ -106,3 +124,57 @@ VALUES (?,?,?,?,?,?)
 """, (idea, papers_found, factors_extracted, factors_passed, report_path,
       datetime.now().isoformat()))
             return cur.lastrowid
+
+    # ── Experience memory（FactorMiner RALPH 循环）────────────────────────────
+
+    def save_experience(self, factor_name: str, hypothesis_type: str,
+                        outcome: str, failure_mode: str = "",
+                        repair_applied: str = "", repair_outcome: str = "NOT_TRIED",
+                        ic_mean: float = 0.0, key_insight: str = "") -> int:
+        """
+        保存一次因子挖掘经历，供未来类似任务检索。
+        outcome: "PASS" | "FAIL"
+        failure_mode: "LOW_IC" | "LOW_ICIR" | "LOW_COVERAGE" | "REVERSAL" | "TIMEOUT" | "ENV" | ""
+        """
+        with self._conn() as c:
+            cur = c.execute("""
+INSERT INTO mining_experience
+  (factor_name, hypothesis_type, outcome, failure_mode, repair_applied,
+   repair_outcome, ic_mean, key_insight, created_at)
+VALUES (?,?,?,?,?,?,?,?,?)
+""", (factor_name, hypothesis_type, outcome, failure_mode, repair_applied,
+      repair_outcome, ic_mean, key_insight, datetime.now().isoformat()))
+            return cur.lastrowid
+
+    def get_similar_failures(self, hypothesis_keyword: str, limit: int = 5) -> List[Dict]:
+        """
+        检索相似假设类型的历史失败经验，用于在生成代码前提供上下文。
+        hypothesis_keyword: 从假设描述中提取的关键词（如 "momentum", "reversal"）
+        """
+        with self._conn() as c:
+            cur = c.execute("""
+SELECT failure_mode, repair_applied, repair_outcome, key_insight, ic_mean
+FROM mining_experience
+WHERE outcome = 'FAIL'
+  AND (hypothesis_type LIKE ? OR hypothesis_type LIKE ?)
+ORDER BY created_at DESC
+LIMIT ?
+""", (f"%{hypothesis_keyword}%", f"%{hypothesis_keyword.split()[0] if hypothesis_keyword else ''}%",
+      limit))
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    def get_successful_patterns(self, limit: int = 10) -> List[Dict]:
+        """
+        检索高质量成功因子的模式，用于指导新因子生成。
+        """
+        with self._conn() as c:
+            cur = c.execute("""
+SELECT hypothesis_type, repair_applied, ic_mean, key_insight
+FROM mining_experience
+WHERE outcome = 'PASS' AND ic_mean > 0.03
+ORDER BY ic_mean DESC
+LIMIT ?
+""", (limit,))
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]

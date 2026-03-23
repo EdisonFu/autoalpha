@@ -148,6 +148,52 @@ class FactorEvalAgent:
             return "FAIL", "; ".join(fails)
         return "PASS", ""
 
+    def get_repair_hints(self, result: "FactorResult") -> str:
+        """
+        基于评估失败的具体指标，返回定向修复建议。
+        供 pipeline 在回传给 LLM 修复时使用（来自 BrainAlpha FM-1~FM-6 分类思想）。
+        """
+        hints = []
+        if result.ic_mean < 0:
+            hints.append(
+                "Signal is reversed — multiply factor values by -1 before cross-sectional normalization."
+            )
+        elif result.ic_mean < GATES["ic_mean"]:
+            hints.append(
+                "IC too low. Try: (1) subtract group/industry mean before ranking to add neutralization, "
+                "(2) increase the lookback window to reduce noise, "
+                "(3) ensure rank normalization is applied cross-sectionally each date."
+            )
+        if result.icir < GATES["icir"]:
+            hints.append(
+                "ICIR too low (signal unstable). Try: (1) apply exponential decay weighting "
+                "(e.g., ewm(halflife=N)) to smooth the factor, "
+                "(2) winsorize at 3-sigma to reduce outlier impact on ranking."
+            )
+        if result.coverage < GATES["coverage"]:
+            hints.append(
+                "Coverage too low. Try: (1) reduce min_periods in rolling operations, "
+                "(2) fill missing values with group median before ranking, "
+                "(3) ensure you are iterating over all stocks not just non-NaN ones."
+            )
+        if result.ic_decay_ratio < GATES["ic_decay_ratio"]:
+            hints.append(
+                "Signal decays too fast (IC at 5d << IC at 1d). "
+                "Try increasing lookback window or applying exponential decay weighting."
+            )
+        if result.monthly_win_rate < GATES["monthly_win_rate"]:
+            hints.append(
+                "Monthly win rate low. Verify the factor direction matches the hypothesis. "
+                "Try cross-sectional z-score normalization to stabilize signal direction across time."
+            )
+        if result.max_correlation >= GATES["max_correlation"]:
+            hints.append(
+                "Factor too correlated with existing factors. "
+                "Try: (1) compute industry-relative version (subtract sector mean), "
+                "(2) orthogonalize against a common factor like market beta."
+            )
+        return " ".join(hints) if hints else "Review all quality gates and the factor formula."
+
     def _fail(self, name, code_path, reason):
         return FactorResult(
             factor_name=name, ic_mean=0, icir=0, ic_decay_ratio=0,

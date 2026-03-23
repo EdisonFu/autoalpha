@@ -46,31 +46,36 @@ class LLMClient:
             "No API key found. Set one of: ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY"
         )
 
-    def complete(self, system: str = "", user: str = "", prompt: str = "") -> str:
+    def complete(self, system: str = "", user: str = "", prompt: str = "",
+                 temperature: float = None) -> str:
         """
         Single-turn completion. 支持两种调用方式：
-          complete(system="...", user="...")   # 推荐
-          complete(prompt="...", system="...") # 兼容旧调用
+          complete(system="...", user="...")              # 推荐
+          complete(prompt="...", system="...")            # 兼容旧调用
+          complete(..., temperature=0.3)                 # 修复模式低温度（来自 BrainAlpha/AlphaEvolve）
+        temperature=None 时使用模型默认值；生成用 ~0.7，修复用 ~0.3。
         """
         content = user or prompt
         if self.provider == "anthropic":
-            msg = self.client.messages.create(
+            kwargs: Dict[str, Any] = dict(
                 model=self.model,
                 max_tokens=8192,
                 system=system or "You are a helpful assistant.",
                 messages=[{"role": "user", "content": content}],
             )
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            msg = self.client.messages.create(**kwargs)
             return msg.content[0].text
         else:
             messages = []
             if system:
                 messages.append({"role": "system", "content": system})
             messages.append({"role": "user", "content": content})
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=8192,
-            )
+            kwargs = dict(model=self.model, messages=messages, max_tokens=8192)
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            resp = self.client.chat.completions.create(**kwargs)
             return resp.choices[0].message.content
 
     def chat_with_tools(self, messages: List[Dict], system: str, tools: List[Dict]) -> Dict:
