@@ -20,9 +20,14 @@ class FactorEvalAgent:
     对比已有因子库的相关性，输出 FactorResult。
     """
 
-    def __init__(self, existing_ic_series: list = None):
-        """existing_ic_series: list of IC value lists from already-passing factors"""
+    def __init__(self, existing_ic_series: list = None, gates: dict = None):
+        """
+        existing_ic_series: list of IC value lists from already-passing factors
+        gates: override default quality gates (useful for small universes like 24 ETFs
+               where IC noise floor is ~0.2 and default ICIR=0.5 is unachievable)
+        """
         self.existing_ic_series = existing_ic_series or []
+        self.gates = {**GATES, **(gates or {})}
 
     def evaluate(self, spec: FactorSpec, factor_csv: str, price_data: dict) -> FactorResult:
         print(f"[FactorEval] 评估因子: {spec.factor_name}")
@@ -81,6 +86,8 @@ class FactorEvalAgent:
     def _load_factor(self, csv_path: str) -> pd.Series:
         df = pd.read_csv(csv_path, index_col=[0, 1], parse_dates=[0])
         df.index.names = ["date", "stock"]
+        # Stock codes must be strings to match price_matrix column keys
+        df.index = df.index.set_levels(df.index.levels[1].astype(str), level=1)
         return df.iloc[:, 0].rename("factor_value")
 
     def _build_price_matrix(self, price_data: dict) -> pd.DataFrame:
@@ -131,19 +138,20 @@ class FactorEvalAgent:
         return max_corr
 
     def _check_gates(self, r: FactorResult):
+        g = self.gates
         fails = []
-        if r.ic_mean < GATES["ic_mean"]:
-            fails.append(f"IC均值={r.ic_mean:.4f} < {GATES['ic_mean']}")
-        if r.icir < GATES["icir"]:
-            fails.append(f"ICIR={r.icir:.4f} < {GATES['icir']}")
-        if r.ic_decay_ratio < GATES["ic_decay_ratio"]:
-            fails.append(f"IC衰减比={r.ic_decay_ratio:.4f} < {GATES['ic_decay_ratio']}")
-        if r.coverage < GATES["coverage"]:
-            fails.append(f"覆盖率={r.coverage:.4f} < {GATES['coverage']}")
-        if r.monthly_win_rate < GATES["monthly_win_rate"]:
-            fails.append(f"月胜率={r.monthly_win_rate:.4f} < {GATES['monthly_win_rate']}")
-        if r.max_correlation >= GATES["max_correlation"]:
-            fails.append(f"与已有因子相关={r.max_correlation:.4f} >= {GATES['max_correlation']}")
+        if r.ic_mean < g["ic_mean"]:
+            fails.append(f"IC均值={r.ic_mean:.4f} < {g['ic_mean']}")
+        if r.icir < g["icir"]:
+            fails.append(f"ICIR={r.icir:.4f} < {g['icir']}")
+        if r.ic_decay_ratio < g["ic_decay_ratio"]:
+            fails.append(f"IC衰减比={r.ic_decay_ratio:.4f} < {g['ic_decay_ratio']}")
+        if r.coverage < g["coverage"]:
+            fails.append(f"覆盖率={r.coverage:.4f} < {g['coverage']}")
+        if r.monthly_win_rate < g["monthly_win_rate"]:
+            fails.append(f"月胜率={r.monthly_win_rate:.4f} < {g['monthly_win_rate']}")
+        if r.max_correlation >= g["max_correlation"]:
+            fails.append(f"与已有因子相关={r.max_correlation:.4f} >= {g['max_correlation']}")
         if fails:
             return "FAIL", "; ".join(fails)
         return "PASS", ""
@@ -153,40 +161,41 @@ class FactorEvalAgent:
         基于评估失败的具体指标，返回定向修复建议。
         供 pipeline 在回传给 LLM 修复时使用（来自 BrainAlpha FM-1~FM-6 分类思想）。
         """
+        g = self.gates
         hints = []
         if result.ic_mean < 0:
             hints.append(
                 "Signal is reversed — multiply factor values by -1 before cross-sectional normalization."
             )
-        elif result.ic_mean < GATES["ic_mean"]:
+        elif result.ic_mean < g["ic_mean"]:
             hints.append(
                 "IC too low. Try: (1) subtract group/industry mean before ranking to add neutralization, "
                 "(2) increase the lookback window to reduce noise, "
                 "(3) ensure rank normalization is applied cross-sectionally each date."
             )
-        if result.icir < GATES["icir"]:
+        if result.icir < g["icir"]:
             hints.append(
                 "ICIR too low (signal unstable). Try: (1) apply exponential decay weighting "
                 "(e.g., ewm(halflife=N)) to smooth the factor, "
                 "(2) winsorize at 3-sigma to reduce outlier impact on ranking."
             )
-        if result.coverage < GATES["coverage"]:
+        if result.coverage < g["coverage"]:
             hints.append(
                 "Coverage too low. Try: (1) reduce min_periods in rolling operations, "
                 "(2) fill missing values with group median before ranking, "
                 "(3) ensure you are iterating over all stocks not just non-NaN ones."
             )
-        if result.ic_decay_ratio < GATES["ic_decay_ratio"]:
+        if result.ic_decay_ratio < g["ic_decay_ratio"]:
             hints.append(
                 "Signal decays too fast (IC at 5d << IC at 1d). "
                 "Try increasing lookback window or applying exponential decay weighting."
             )
-        if result.monthly_win_rate < GATES["monthly_win_rate"]:
+        if result.monthly_win_rate < g["monthly_win_rate"]:
             hints.append(
                 "Monthly win rate low. Verify the factor direction matches the hypothesis. "
                 "Try cross-sectional z-score normalization to stabilize signal direction across time."
             )
-        if result.max_correlation >= GATES["max_correlation"]:
+        if result.max_correlation >= g["max_correlation"]:
             hints.append(
                 "Factor too correlated with existing factors. "
                 "Try: (1) compute industry-relative version (subtract sector mean), "

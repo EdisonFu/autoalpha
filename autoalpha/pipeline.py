@@ -11,6 +11,7 @@ from .agents.factor_extract_agent import FactorExtractAgent
 from .agents.factor_implement_agent import FactorImplementAgent, classify_error
 from .agents.factor_eval_agent import FactorEvalAgent
 from .agents.factor_extension_agent import FactorExtensionAgent
+from .agents.factor_judge_agent import FactorJudgeAgent
 from .agents.report_agent import ReportAgent
 
 
@@ -57,6 +58,7 @@ class AutoAlphaPipeline:
         self.factor_extract   = FactorExtractAgent(self.llm)
         self.factor_implement = FactorImplementAgent(self.llm, output_dir=os.path.join(output_dir, "factors"))
         self.factor_eval      = FactorEvalAgent()
+        self.factor_judge     = FactorJudgeAgent(self.llm)
         self.factor_ext       = FactorExtensionAgent(self.llm)
         self.reporter         = ReportAgent(output_dir=os.path.join(output_dir, "reports"))
 
@@ -110,13 +112,15 @@ class AutoAlphaPipeline:
 
         for i, spec in enumerate(all_specs, 1):
             print(f"[Pipeline] 处理因子 {i}/{len(all_specs)}: {spec.factor_name}")
-            result = self._implement_and_eval(spec, price_data)
+            exp_ctx = self._get_experience_context(spec)
+            result = self._implement_and_eval(spec, price_data, experience_context=exp_ctx)
             if result.status == "PASS":
                 passed.append(result)
                 self.db.save_factor(result, spec)
                 self.factor_eval.existing_ic_series.append(result.ic_series)
             else:
                 failed.append(result)
+            self._save_experience(spec, result)
 
         # Step 5: Extensions for passing factors
         extensions_passed: List[FactorResult] = []
@@ -126,11 +130,13 @@ class AutoAlphaPipeline:
                 continue
             ext_specs = self.factor_ext.propose_extensions(base_spec, base_result)
             for ext_spec in ext_specs[:_MAX_EXTENSIONS_PER_FACTOR]:
-                ext_result = self._implement_and_eval(ext_spec, price_data)
+                exp_ctx = self._get_experience_context(ext_spec)
+                ext_result = self._implement_and_eval(ext_spec, price_data, experience_context=exp_ctx)
                 if ext_result.status == "PASS":
                     extensions_passed.append(ext_result)
                     self.db.save_factor(ext_result, ext_spec)
                     self.factor_eval.existing_ic_series.append(ext_result.ic_series)
+                self._save_experience(ext_spec, ext_result)
 
         # Step 6: Report
         report = FactorReport(
@@ -150,7 +156,8 @@ class AutoAlphaPipeline:
     # ── Core loop ──────────────────────────────────────────────────────────────
 
     def _implement_and_eval(self, spec: FactorSpec, price_data: dict,
-                             retries: int = _MAX_IMPLEMENT_RETRIES) -> FactorResult:
+                             retries: int = _MAX_IMPLEMENT_RETRIES,
+                             experience_context: str = None) -> FactorResult:
         """
         因子实现 + 评估的核心循环，包含：
         1. 错误分类 + 硬停止（TIMEOUT/ENV）
@@ -159,10 +166,14 @@ class AutoAlphaPipeline:
         """
         error_ctx: Optional[str] = None
         ic_history: List[float] = []
+        best_result: Optional[FactorResult] = None   # best eval result so far
 
         for attempt in range(1, retries + 2):  # 最多 retries+1 次尝试
             # ── 实现阶段 ──────────────────────────────────────────────────────
-            csv_path, impl_error = self.factor_implement.implement(spec, price_data, error_ctx)
+            csv_path, impl_error = self.factor_implement.implement(
+                spec, price_data, error_ctx,
+                experience_context=experience_context if not error_ctx else None,
+            )
 
             if impl_error:
                 err_type = classify_error(impl_error)
@@ -176,7 +187,7 @@ class AutoAlphaPipeline:
                     )
 
                 if attempt > retries:
-                    return FactorResult.failed(
+                    return best_result or FactorResult.failed(
                         spec.factor_name, "",
                         f"实现失败（{retries+1}次尝试后放弃）: {impl_error[:200]}"
                     )
@@ -187,9 +198,26 @@ class AutoAlphaPipeline:
             result = self.factor_eval.evaluate(spec, csv_path, price_data)
             print(f"[Pipeline] {spec.factor_name}: "
                   f"IC={result.ic_mean:.4f} ICIR={result.icir:.4f} → {result.status}")
+            if best_result is None or result.ic_mean > best_result.ic_mean:
+                best_result = result
 
             if result.status == "PASS":
-                return result
+                # ── LLM Judge: semantic peer review ───────────────────────────
+                # result.code_path holds the CSV; derive the .py file for code review
+                py_path = (csv_path.replace(".csv", ".py")
+                           if csv_path and csv_path.endswith(".csv") else "")
+                verdict = self.factor_judge.judge(spec, result, py_path)
+                result.judge_score = float(verdict.get("overall_score", 0.0))
+                result.judge_comment = (
+                    verdict.get("rejection_reason") or
+                    verdict.get("improvement_suggestions", "")
+                )
+                if verdict.get("verdict") == "REJECT":
+                    result.status = "FAIL"
+                    result.fail_reason = f"[JUDGE] {verdict.get('rejection_reason', 'semantic review failed')}"
+                    print(f"[Pipeline] Judge 拒绝 {spec.factor_name}: {result.fail_reason}")
+                else:
+                    return result
 
             # ── 收敛控制 ──────────────────────────────────────────────────────
             ic_history.append(result.ic_mean)
@@ -197,25 +225,78 @@ class AutoAlphaPipeline:
                 delta = ic_history[-1] - ic_history[-2]
                 if abs(delta) < _STAGNATION_DELTA:
                     print(f"[Pipeline] 停滞检测：连续迭代 IC 无改善（Δ={delta:.4f}），停止修复")
-                    return result
+                    return best_result
                 if delta < _DETERIORATION_DELTA:
                     print(f"[Pipeline] 恶化检测：IC 下降（Δ={delta:.4f}），停止修复")
-                    return result
+                    return best_result
 
             if attempt > retries:
-                return result
+                return best_result
 
             # ── 评估失败 → 定向修复建议反馈 ──────────────────────────────────
             repair_hint = self.factor_eval.get_repair_hints(result)
+            judge_suggestions = getattr(result, "judge_comment", "")
+            extra = (f"\n\nLLM judge suggestions:\n{judge_suggestions}"
+                     if judge_suggestions and "[JUDGE]" in result.fail_reason else "")
             error_ctx = (
                 f"[EVAL_FAIL] Code ran without errors but failed quality gates.\n"
                 f"Failed metrics: {result.fail_reason}\n\n"
-                f"Targeted repair suggestions:\n{repair_hint}"
+                f"Targeted repair suggestions:\n{repair_hint}{extra}"
             )
             print(f"[Pipeline] 评估未达标，尝试定向修复（第{attempt}次）: "
                   f"{result.fail_reason[:100]}")
 
-        return result  # unreachable but satisfies type checker
+        return best_result  # unreachable but satisfies type checker
+
+    # ── Experience memory (RALPH loop) ─────────────────────────────────────────
+
+    def _save_experience(self, spec: FactorSpec, result: FactorResult) -> None:
+        """Save mining experience for future retrieval (FactorMiner RALPH design)."""
+        keyword = " ".join(spec.hypothesis.lower().split()[:5])
+        failure_mode = ""
+        if result.status == "FAIL":
+            r = result.fail_reason.upper()
+            if "TIMEOUT" in r:       failure_mode = "TIMEOUT"
+            elif "ENV" in r:         failure_mode = "ENV"
+            elif "[JUDGE]" in r:     failure_mode = "JUDGE_REJECT"
+            elif "IC均值" in r or "IC_MEAN" in r.upper(): failure_mode = "LOW_IC"
+            elif "ICIR" in r:        failure_mode = "LOW_ICIR"
+            elif "覆盖率" in r or "COVERAGE" in r.upper(): failure_mode = "LOW_COVERAGE"
+            elif "相关" in r or "CORR" in r.upper(): failure_mode = "HIGH_CORR"
+            else:                    failure_mode = "OTHER"
+        key_insight = getattr(result, "judge_comment", "") or result.fail_reason[:200]
+        try:
+            self.db.save_experience(
+                factor_name=spec.factor_name,
+                hypothesis_type=keyword,
+                outcome=result.status,
+                failure_mode=failure_mode,
+                ic_mean=result.ic_mean,
+                key_insight=key_insight,
+            )
+        except Exception as e:
+            print(f"[Pipeline] 经验保存失败 (非致命): {e}")
+
+    def _get_experience_context(self, spec: FactorSpec) -> str:
+        """Fetch relevant mining experience to guide code generation (RALPH Retrieve step)."""
+        keyword = " ".join(spec.hypothesis.lower().split()[:3])
+        try:
+            failures = self.db.get_similar_failures(keyword, limit=3)
+            successes = self.db.get_successful_patterns(limit=2)
+        except Exception:
+            return ""
+        if not failures and not successes:
+            return ""
+        lines = []
+        if failures:
+            lines.append("Avoid these previously-observed failure patterns for similar factors:")
+            for f in failures:
+                lines.append(f"  [{f['failure_mode']}] {f['key_insight']}")
+        if successes:
+            lines.append("Successful patterns to draw inspiration from:")
+            for s in successes:
+                lines.append(f"  [{s['hypothesis_type']}] IC={s['ic_mean']:.4f}: {s['key_insight']}")
+        return "\n".join(lines)
 
     # ── Data loading ───────────────────────────────────────────────────────────
 

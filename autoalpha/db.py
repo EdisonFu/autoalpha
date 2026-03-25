@@ -62,6 +62,15 @@ CREATE TABLE IF NOT EXISTS mining_experience (
     created_at       TEXT
 );
 """)
+            # Idempotent migrations for columns added after initial schema
+            for col, typedef in [
+                ("judge_score", "REAL DEFAULT 0.0"),
+                ("judge_comment", "TEXT DEFAULT ''"),
+            ]:
+                try:
+                    c.execute(f"ALTER TABLE factor_library ADD COLUMN {col} {typedef}")
+                except Exception:
+                    pass  # column already exists
 
     # ── Factor library ─────────────────────────────────────────────────────────
 
@@ -71,8 +80,9 @@ CREATE TABLE IF NOT EXISTS mining_experience (
 INSERT INTO factor_library
   (factor_name, description, formula, source_paper_title, source_paper_url,
    ic_mean, icir, ic_decay_ratio, coverage, monthly_win_rate, max_correlation,
-   status, code_path, variant_of, extension_type, ic_series, created_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+   status, code_path, variant_of, extension_type, ic_series,
+   judge_score, judge_comment, created_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """, (
                 result.factor_name,
                 spec.description if spec else "",
@@ -85,6 +95,8 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 spec.variant_of if spec else None,
                 spec.extension_type if spec else None,
                 json.dumps(result.ic_series),
+                getattr(result, "judge_score", 0.0),
+                getattr(result, "judge_comment", ""),
                 datetime.now().isoformat(),
             ))
             return cur.lastrowid

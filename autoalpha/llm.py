@@ -3,6 +3,10 @@ import json
 from typing import List, Dict, Any
 
 
+class CreditExhaustedError(RuntimeError):
+    """Raised when the API account has insufficient credits."""
+
+
 class LLMClient:
     def __init__(self, config: dict = None):
         """
@@ -65,7 +69,13 @@ class LLMClient:
             )
             if temperature is not None:
                 kwargs["temperature"] = temperature
-            msg = self.client.messages.create(**kwargs)
+            try:
+                msg = self.client.messages.create(**kwargs)
+            except Exception as e:
+                es = str(e).lower()
+                if "credit balance" in es or "insufficient" in es:
+                    raise CreditExhaustedError(str(e)) from e
+                raise  # connection errors etc. propagate as-is
             return msg.content[0].text
         else:
             messages = []

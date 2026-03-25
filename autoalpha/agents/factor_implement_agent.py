@@ -111,13 +111,14 @@ class FactorImplementAgent:
         os.makedirs(output_dir, exist_ok=True)
 
     def implement(self, spec: FactorSpec, data: dict,
-                  error_context: str = None) -> Tuple[Optional[str], Optional[str]]:
+                  error_context: str = None,
+                  experience_context: str = None) -> Tuple[Optional[str], Optional[str]]:
         """
         Returns (factor_csv_path, error_msg).
         factor_csv_path is None on failure.
         error_context: previous error or eval failure — triggers targeted repair.
         """
-        code = self._generate_code(spec, data, error_context)
+        code = self._generate_code(spec, data, error_context, experience_context)
 
         # Lookahead bias warning (non-blocking, informational)
         warnings = self._check_lookahead_bias(code)
@@ -156,7 +157,9 @@ class FactorImplementAgent:
 
     # ── internals ──────────────────────────────────────────────────────────────
 
-    def _generate_code(self, spec: FactorSpec, data: dict, error_context: str = None) -> str:
+    def _generate_code(self, spec: FactorSpec, data: dict,
+                       error_context: str = None,
+                       experience_context: str = None) -> str:
         available_cols = set()
         for df in list(data.values())[:3]:
             available_cols.update(df.columns.tolist())
@@ -187,6 +190,12 @@ class FactorImplementAgent:
             )
         else:
             # Generation mode: Chain-of-Thought prompt（来自 Chain-of-Alpha 论文）
+            if experience_context:
+                base_parts = base_parts + [
+                    "\n--- Historical mining experience (RALPH memory) ---",
+                    experience_context,
+                    "--- End of experience ---",
+                ]
             return strip_code_fence(
                 self.llm.complete(system=_CODEGEN_SYSTEM, user="\n".join(base_parts),
                                   temperature=0.7)

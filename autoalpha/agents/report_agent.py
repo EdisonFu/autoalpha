@@ -9,13 +9,60 @@ _FAIL_COLOR = "#ef4444"
 _EXT_COLOR  = "#3b82f6"
 
 
+def _sparkline(ic_series: list, width: int = 90, height: int = 22) -> str:
+    if len(ic_series) < 2:
+        return ""
+    mn, mx = min(ic_series), max(ic_series)
+    span = mx - mn if mx != mn else 1.0
+    # y coordinate for a given value (0=top, height=bottom in SVG)
+    def _y(v: float) -> float:
+        return height - (v - mn) / span * height
+    # zero-line y position
+    zero_y = _y(0.0)
+    zero_y = max(0.0, min(float(height), zero_y))
+    n = len(ic_series)
+    step = width / (n - 1)
+    points = " ".join(
+        f"{i * step:.2f},{_y(v):.2f}" for i, v in enumerate(ic_series)
+    )
+    mean_ic = sum(ic_series) / n
+    line_color = "#22c55e" if mean_ic > 0 else "#ef4444"
+    return (
+        f'<svg width="{width}" height="{height}" style="vertical-align:middle" '
+        f'xmlns="http://www.w3.org/2000/svg">'
+        f'<line x1="0" y1="{zero_y:.2f}" x2="{width}" y2="{zero_y:.2f}" '
+        f'stroke="#cbd5e1" stroke-width="0.8"/>'
+        f'<polyline points="{points}" fill="none" stroke="{line_color}" stroke-width="1.5"/>'
+        f'</svg>'
+    )
+
+
+def _avg_judge_score(results: list) -> str:
+    scores = [getattr(r, "judge_score", 0.0) for r in results if getattr(r, "judge_score", 0.0) > 0]
+    if not scores:
+        return "—"
+    return f"{sum(scores) / len(scores):.1f}"
+
+
 def _badge(status: str) -> str:
     color = _PASS_COLOR if status == "PASS" else _FAIL_COLOR
     return f'<span style="background:{color};color:white;padding:2px 8px;border-radius:4px;font-size:0.85em">{status}</span>'
 
 
+def _judge_badge(score: float) -> str:
+    if score <= 0:
+        return ""
+    color = "#22c55e" if score >= 7 else ("#f59e0b" if score >= 5 else "#ef4444")
+    return f'<span style="background:{color};color:white;padding:1px 6px;border-radius:4px;font-size:0.8em">{score:.1f}</span>'
+
+
 def _row(r: FactorResult, row_class: str = "") -> str:
+    judge_score = getattr(r, "judge_score", 0.0)
+    judge_comment = getattr(r, "judge_comment", "")
     fail = f'<span style="color:#888;font-size:0.8em">{r.fail_reason}</span>' if r.fail_reason else ""
+    judge_cell = _judge_badge(judge_score)
+    if judge_comment and judge_score > 0:
+        judge_cell += f' <span style="color:#64748b;font-size:0.78em" title="{judge_comment}">ℹ</span>'
     return f"""<tr class="{row_class}">
   <td>{r.factor_name}</td>
   <td>{r.ic_mean:.4f}</td>
@@ -24,6 +71,8 @@ def _row(r: FactorResult, row_class: str = "") -> str:
   <td>{r.coverage:.3f}</td>
   <td>{r.monthly_win_rate:.3f}</td>
   <td>{r.max_correlation:.3f}</td>
+  <td>{_sparkline(getattr(r, 'ic_series', []))}</td>
+  <td>{judge_cell}</td>
   <td>{_badge(r.status)} {fail}</td>
 </tr>"""
 
@@ -106,6 +155,7 @@ class ReportAgent:
     <div class="stat"><div class="stat-value">{report.total_tested}</div><div class="stat-label">测试因子</div></div>
     <div class="stat"><div class="stat-value" style="color:{_PASS_COLOR}">{len(report.passed) + len(report.extensions_passed)}</div><div class="stat-label">通过因子</div></div>
     <div class="stat"><div class="stat-value" style="color:{_FAIL_COLOR}">{len(report.failed)}</div><div class="stat-label">未通过因子</div></div>
+    <div class="stat"><div class="stat-value" style="color:#f59e0b">{_avg_judge_score(report.passed + report.extensions_passed)}</div><div class="stat-label">平均Judge评分</div></div>
   </div>
 </div>
 
@@ -117,7 +167,7 @@ class ReportAgent:
 <div class="card">
   <h2>因子评估结果</h2>
   <table>
-    <tr><th>因子名</th><th>IC均值</th><th>ICIR</th><th>IC衰减比</th><th>覆盖率</th><th>月胜率</th><th>最大相关</th><th>状态</th></tr>
+    <tr><th>因子名</th><th>IC均值</th><th>ICIR</th><th>IC衰减比</th><th>覆盖率</th><th>月胜率</th><th>最大相关</th><th>IC走势</th><th>Judge评分</th><th>状态</th></tr>
     {rows_html}
   </table>
 </div>

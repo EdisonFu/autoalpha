@@ -31,6 +31,8 @@ class FactorResult:
     fail_reason: str = ""
     code_path: str = ""
     ic_series: List[float] = field(default_factory=list)
+    judge_score: float = 0.0    # LLM judge overall score (0-10); 0 = not judged
+    judge_comment: str = ""     # judge improvement suggestions or rejection reason
 
     @classmethod
     def failed(cls, name: str, code_path: str, reason: str) -> "FactorResult":
