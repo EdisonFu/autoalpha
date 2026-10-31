@@ -101,7 +101,7 @@ autoalpha/
 ├── main.py                          # 交互式 CLI 入口
 ├── requirements.txt
 └── autoalpha/
-    ├── llm.py                       # LLM 客户端（支持 Anthropic/DeepSeek/OpenAI）
+    ├── llm.py                       # LLM 客户端（支持 多家 LLM 供应商）
     ├── pipeline.py                  # 主流水线编排
     ├── pipeline_state.py            # 数据结构：FactorSpec / FactorResult / FactorReport
     ├── db.py                        # SQLite 因子库

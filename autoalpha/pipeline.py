@@ -149,6 +149,7 @@ class AutoAlphaPipeline:
             extensions_passed=extensions_passed,
         )
         report_path = self.reporter.generate(report)
+        report.report_path = report_path
         self.db.save_session(idea, len(papers), len(all_specs),
                              len(passed) + len(extensions_passed), report_path)
         return report

@@ -11,9 +11,9 @@ class LLMClient:
     def __init__(self, config: dict = None):
         """
         config 可选。不传时从环境变量自动初始化：
-          - ANTHROPIC_API_KEY  → 使用 Anthropic claude-sonnet-4-6
-          - DEEPSEEK_API_KEY   → 使用 DeepSeek deepseek-chat
-          - OPENAI_API_KEY     → 使用 OpenAI gpt-4o
+          - ANTHROPIC_API_KEY  → 使用 Anthropic <中等模型>
+          - DEEPSEEK_API_KEY   → 使用 DeepSeek <中等模型>
+          - OPENAI_API_KEY     → 使用 OpenAI <中等模型>
         """
         if config is None:
             config = self._auto_config()
@@ -37,14 +37,14 @@ class LLMClient:
     @staticmethod
     def _auto_config() -> dict:
         if os.environ.get("ANTHROPIC_API_KEY"):
-            return {"provider": "anthropic", "model": "claude-sonnet-4-6",
+            return {"provider": "anthropic", "model": "<中等模型>",
                     "api_key_env": "ANTHROPIC_API_KEY"}
         if os.environ.get("DEEPSEEK_API_KEY"):
-            return {"provider": "openai", "model": "deepseek-chat",
+            return {"provider": "openai", "model": "<中等模型>",
                     "api_key_env": "DEEPSEEK_API_KEY",
                     "base_url": "https://api.deepseek.com/v1"}
         if os.environ.get("OPENAI_API_KEY"):
-            return {"provider": "openai", "model": "gpt-4o",
+            return {"provider": "openai", "model": "<中等模型>",
                     "api_key_env": "OPENAI_API_KEY"}
         raise EnvironmentError(
             "No API key found. Set one of: ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY"
