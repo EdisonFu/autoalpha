@@ -45,8 +45,25 @@ IS_GATES = {
     "monotonicity":      0.6,    # 核心判据：各层收益须单调
     "ls_sharpe":         0.5,    # 多空组合（天然市场中性）
     "coverage":          0.7,
-    "turnover_daily":    0.30,   # 防高换手伪因子
 }
+
+# 换手门槛按调仓频率校准。实测同一因子（mom_60d）在不同频率下：
+#   日频 0.415 / 周频 0.188 / 月频 0.091
+# 固定 0.30 会让日频因子必然超标、月频因子轻松通过，门槛变成频率的函数
+# 而非因子质量的函数。实测 E2E 四个周频因子全挤在 0.32-0.33，说明
+# 对周频而言 0.30 偏紧。按频率给出各自的合理上限：
+_TURNOVER_CAP = {
+    "D":      0.60,   # 日频调仓，换手天然高
+    "W-FRI":  0.40,
+    "W":      0.40,
+    "ME":     0.15,   # 月频，换手应很低
+    "M":      0.15,
+}
+_TURNOVER_CAP_DEFAULT = 0.40
+
+
+def turnover_cap(rebalance: str) -> float:
+    return _TURNOVER_CAP.get(str(rebalance).upper(), _TURNOVER_CAP_DEFAULT)
 
 # ── OOS 认证门控（仅 IS 通过者，只测一次）────────────────────────────────────
 #
@@ -122,6 +139,7 @@ class SplitEngine:
         w = self.width(period)
         n_obs = len(px)
         g = dict(IS_GATES)
+        g["turnover_daily"] = turnover_cap(self.rebalance)
         g["ic_mean_floor"] = ic_mean_floor(w, n_obs, IS_GATES["ic_tstat_target"])
         g["t_threshold"] = t_threshold(n_trials)
         g["_width"] = w

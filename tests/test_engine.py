@@ -312,3 +312,44 @@ def test_recency_does_not_outrank_relevance():
         [s for _, s, _ in rows])
     assert out[0]["_relevance_score"] == 8, "相关性更高的论文应排前"
     assert "ChatGPT" in out[-1]["title"], "rel=7 的论文应排最后"
+
+
+def test_turnover_cap_scales_with_rebalance_frequency():
+    """
+    换手门槛必须随调仓频率变化。实测同一因子 mom_60d：
+    日频 0.415 / 周频 0.188 / 月频 0.091 —— 固定 0.30 会让门槛
+    变成频率的函数而非因子质量的函数。
+    """
+    from autoalpha.engine import turnover_cap
+    assert turnover_cap("D") > turnover_cap("W-FRI") > turnover_cap("ME")
+    assert turnover_cap("unknown") == turnover_cap("W-FRI")
+
+
+def test_gates_use_engine_rebalance():
+    data = _mk_data(n_days=600, n_sym=30, seed=23)
+    from autoalpha.engine import turnover_cap
+    for rb in ("D", "W-FRI", "ME"):
+        eng = SplitEngine(data, start="2022-01-01", end="2026-02-28",
+                          rebalance=rb)
+        assert eng.gates_for("is")["turnover_daily"] == turnover_cap(rb)
+
+
+def test_sign_flip_mirrors_ic_and_monotonicity():
+    """
+    符号一致性：因子取负后 IC/t/单调性必须精确反向。
+    （Sharpe 不要求精确镜像 —— 几何年化对正负收益天然不对称，
+    实测 +0.4%/日 年化 +173% 而 -0.4%/日 年化 -64%。）
+    """
+    data = _mk_data(n_days=700, n_sym=30, seed=29)
+    eng = SplitEngine(data, start="2022-01-01", end="2026-02-28")
+    px = eng.price_full
+    f = px.pct_change(60, fill_method=None).stack()
+    f.index.names = ["date", "symbol"]
+
+    ic_a, lm_a, _ = eng.evaluate_is(f)
+    ic_b, lm_b, _ = eng.evaluate_is(-f)
+
+    assert ic_b.ic_mean_1d == pytest.approx(-ic_a.ic_mean_1d, abs=1e-9)
+    assert ic_b.ic_tstat == pytest.approx(-ic_a.ic_tstat, abs=0.02)
+    if abs(lm_a.monotonicity) > 0.1:
+        assert lm_b.monotonicity == pytest.approx(-lm_a.monotonicity, abs=0.25)

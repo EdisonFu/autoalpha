@@ -242,6 +242,18 @@ class FlowOrchestrator:
             if ev.status == "PASS":
                 if ev.nav_net is not None:
                     passed_navs.append(ev.nav_net)
+                # 入库前再查一次：PASS 的因子会成为后续去重基线，
+                # 一条脏数据会污染所有后续判断。实测库里曾存有
+                # llm_news_momentum_score（依赖不存在的新闻数据，
+                # 靠 LLM 自编代理变量通过了旧门控）。
+                dirty = _check_data_available(spec, available)
+                if dirty:
+                    ev.status = "SKIP_NO_DATA"
+                    ev.fail_reason = f"通过门控但数据不可得，拒绝入库: {dirty}"
+                    yield sess.record(FlowEvent(
+                        EventKind.LOG, Stage.EVALUATE,
+                        f"{spec.factor_name} 拒绝入库: {dirty}"))
+                    continue
                 try:
                     self.db.save_factor(_db_row(ev), spec)
                 except Exception as e:

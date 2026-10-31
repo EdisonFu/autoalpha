@@ -78,6 +78,12 @@ def _spawn(sid: str, gen_factory):
 
 @app.post("/api/start")
 def start(req: StartReq):
+    idea = (req.idea or "").strip()
+    if not idea:
+        raise HTTPException(422, "研究方向不能为空")
+    if len(idea) > 500:
+        raise HTTPException(422, "研究方向过长（上限 500 字）")
+    req = StartReq(idea=idea, mode=req.mode)
     sess = FlowSession(idea=req.idea)
     _sessions[sess.session_id] = sess
     orch = get_orch()
