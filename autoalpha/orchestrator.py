@@ -87,7 +87,17 @@ class FlowOrchestrator:
         sess.paper_total = total
         if papers:
             sess.paper_page = page
-            sess.papers = papers
+            if page > 1:
+                # 累积而非替换：sess.papers 是「已加载的全部论文」，
+                # 与前端列表保持同一语义。此前第 2 批会覆盖第 1 批，
+                # 导致 /api/session 的 n_papers 只报最后一批的数量。
+                seen = {id(x) for x in sess.papers}
+                known = {(x.get("title"), x.get("pdf_url")) for x in sess.papers}
+                sess.papers = sess.papers + [
+                    p for p in papers
+                    if (p.get("title"), p.get("pdf_url")) not in known]
+            else:
+                sess.papers = papers
         elif page > 1:
             # 这一批为空：保留上一批，不要把列表清掉
             yield sess.record(FlowEvent(
@@ -107,8 +117,9 @@ class FlowOrchestrator:
         has_more = bool(papers) and total > base + len(papers)
         yield sess.record(FlowEvent(
             EventKind.DATA, Stage.SEARCH,
-            f"找到 {len(papers)} 篇论文" + (f"（第 {page} 批，共 {total} 篇）"
-                                         if total > len(papers) else ""),
+            f"找到 {len(papers)} 篇论文"
+            + (f"（第 {page} 批，已加载 {len(sess.papers)}/{total} 篇）"
+               if total > len(papers) else ""),
             {"page": page, "total": total, "has_more": has_more,
              "papers": [{"idx": base + i, "title": p.get("title", ""),
                          "url": p.get("pdf_url", ""), "date": p.get("date", ""),

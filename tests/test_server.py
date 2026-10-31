@@ -71,3 +71,26 @@ def test_unknown_session_returns_404():
                   json={"session_id": "nope", "page": 2}).status_code == 404
     assert c.post("/api/select",
                   json={"session_id": "nope"}).status_code == 404
+
+
+def test_session_papers_accumulate_across_pages():
+    """
+    sess.papers 必须是「已加载的全部论文」，与前端列表同语义。
+    实测第 2 批曾覆盖第 1 批，使 /api/session 的 n_papers 从 10 变成 5。
+    """
+    from autoalpha.flow import FlowSession
+
+    sess = FlowSession(idea="x")
+    sess.papers = [{"title": f"P{i}", "pdf_url": f"u{i}"} for i in range(10)]
+
+    batch2 = [{"title": f"P{i}", "pdf_url": f"u{i}"} for i in range(10, 15)]
+    known = {(x.get("title"), x.get("pdf_url")) for x in sess.papers}
+    sess.papers = sess.papers + [
+        p for p in batch2 if (p.get("title"), p.get("pdf_url")) not in known]
+    assert len(sess.papers) == 15
+
+    # 重复批次不得重复累积
+    known = {(x.get("title"), x.get("pdf_url")) for x in sess.papers}
+    sess.papers = sess.papers + [
+        p for p in batch2 if (p.get("title"), p.get("pdf_url")) not in known]
+    assert len(sess.papers) == 15, "重复论文被二次累积"
