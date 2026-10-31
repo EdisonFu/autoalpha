@@ -59,11 +59,15 @@ pip install -r requirements.txt
 ### 2. 配置 LLM API Key
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...   # 推荐，使用 Claude
-# 或
-export DEEPSEEK_API_KEY=sk-...        # DeepSeek（性价比高）
-# 或
-export OPENAI_API_KEY=sk-...          # OpenAI GPT-4o
+export LLM_API_KEY=...                # 你的 LLM 密钥
+export LLM_MODEL=<model-id>           # 模型 ID
+
+# 若使用 OpenAI 兼容端点，再设置：
+# export LLM_BASE_URL=https://.../v1
+
+# 可选：按百万 token 计价，用于成本统计
+# export LLM_PRICE_INPUT=3.0
+# export LLM_PRICE_OUTPUT=15.0
 ```
 
 ### 3. 运行
@@ -156,7 +160,7 @@ autoalpha/
 
 ## 技术栈
 
-- **LLM**：Anthropic Claude / DeepSeek / OpenAI
+- **LLM**：任意 OpenAI 兼容或 Anthropic 协议端点（由 LLM_MODEL 指定）
 - **数据**：AKShare（腾讯财经源）
 - **IC 计算**：scipy.stats.spearmanr
 - **代码沙箱**：subprocess 隔离执行（超时 120s）
