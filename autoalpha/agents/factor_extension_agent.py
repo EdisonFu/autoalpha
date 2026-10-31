@@ -59,7 +59,7 @@ class FactorExtensionAgent:
             f"Propose 3-5 extensions that are structurally diverse (not just parameter changes)."
         )
         try:
-            raw = strip_code_fence(self.llm.complete(system=_EXT_SYSTEM, user=user_msg))
+            raw = strip_code_fence(self.llm.complete(system=_EXT_SYSTEM, user=user_msg, purpose="extension"))
             items = json.loads(raw)
             if not isinstance(items, list):
                 items = [items]

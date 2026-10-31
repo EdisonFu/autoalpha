@@ -7,6 +7,55 @@ class CreditExhaustedError(RuntimeError):
     """Raised when the API account has insufficient credits."""
 
 
+# ── Token 计量 ───────────────────────────────────────────────────────────────
+# 价格（美元 / 百万 token）。用于把 token 数换算成实际花费。
+# 只列本项目会用到的模型；未知模型按 0 计价并在汇总里标注。
+_PRICING = {
+    }
+
+
+class TokenMeter:
+    """累计 token 用量，按调用目的分类。线程安全（沙箱/并发下会被多线程写）。"""
+
+    def __init__(self):
+        import threading
+        self._lock = threading.Lock()
+        self.calls = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.by_purpose: Dict[str, Dict[str, int]] = {}
+
+    def record(self, purpose: str, inp: int, out: int, model: str = "") -> None:
+        with self._lock:
+            self.calls += 1
+            self.input_tokens += inp
+            self.output_tokens += out
+            d = self.by_purpose.setdefault(
+                purpose, {"calls": 0, "input": 0, "output": 0})
+            d["calls"] += 1
+            d["input"] += inp
+            d["output"] += out
+            self._model = model or getattr(self, "_model", "")
+
+    def cost_usd(self, model: str = "") -> float:
+        m = model or getattr(self, "_model", "")
+        pin, pout = _PRICING.get(m, (0.0, 0.0))
+        return (self.input_tokens * pin + self.output_tokens * pout) / 1e6
+
+    def summary(self, model: str = "") -> dict:
+        m = model or getattr(self, "_model", "")
+        return {
+            "calls": self.calls,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.input_tokens + self.output_tokens,
+            "cost_usd": round(self.cost_usd(m), 4),
+            "model": m,
+            "priced": m in _PRICING,
+            "by_purpose": dict(self.by_purpose),
+        }
+
+
 class LLMClient:
     def __init__(self, config: dict = None):
         """
@@ -21,6 +70,8 @@ class LLMClient:
         self.model = config["model"]
         provider = config.get("provider", "anthropic")
         api_key = os.environ.get(config.get("api_key_env", "ANTHROPIC_API_KEY"), "")
+
+        self.meter = TokenMeter()
 
         if provider == "anthropic":
             import anthropic
@@ -51,7 +102,7 @@ class LLMClient:
         )
 
     def complete(self, system: str = "", user: str = "", prompt: str = "",
-                 temperature: float = None) -> str:
+                 temperature: float = None, purpose: str = "other") -> str:
         """
         Single-turn completion. 支持两种调用方式：
           complete(system="...", user="...")              # 推荐
@@ -76,6 +127,10 @@ class LLMClient:
                 if "credit balance" in es or "insufficient" in es:
                     raise CreditExhaustedError(str(e)) from e
                 raise  # connection errors etc. propagate as-is
+            u = getattr(msg, "usage", None)
+            if u is not None:
+                self.meter.record(purpose, getattr(u, "input_tokens", 0) or 0,
+                                  getattr(u, "output_tokens", 0) or 0, self.model)
             return msg.content[0].text
         else:
             messages = []
@@ -86,6 +141,10 @@ class LLMClient:
             if temperature is not None:
                 kwargs["temperature"] = temperature
             resp = self.client.chat.completions.create(**kwargs)
+            u = getattr(resp, "usage", None)
+            if u is not None:
+                self.meter.record(purpose, getattr(u, "prompt_tokens", 0) or 0,
+                                  getattr(u, "completion_tokens", 0) or 0, self.model)
             return resp.choices[0].message.content
 
     def chat_with_tools(self, messages: List[Dict], system: str, tools: List[Dict]) -> Dict:

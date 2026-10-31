@@ -52,7 +52,8 @@ class FactorExtractAgent:
 
         user_msg = f"Paper title: {title}\n\nAbstract:\n{abstract}"
         try:
-            raw = strip_code_fence(self.llm.complete(system=_EXTRACT_SYSTEM, user=user_msg))
+            raw = strip_code_fence(self.llm.complete(system=_EXTRACT_SYSTEM, user=user_msg,
+                                                 purpose="extract"))
             items = json.loads(raw)
             if not isinstance(items, list):
                 items = [items]

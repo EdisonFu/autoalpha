@@ -63,7 +63,8 @@ class FactorJudgeAgent:
 
         try:
             raw = strip_code_fence(self.llm.complete(
-                system=_JUDGE_SYSTEM, user=user_msg, temperature=0.2
+                system=_JUDGE_SYSTEM, user=user_msg, temperature=0.2,
+                purpose="judge"
             ))
             verdict = json.loads(raw)
         except Exception as e:
