@@ -21,6 +21,13 @@ _FILTER_BATCH = 20
 # 需要更宽召回时调大此值。
 _SCORE_LIMIT = 60
 
+# 排序中时间项的权重。实测 0.4 会压倒相关性（见 _combined_sort 注释）。
+_RECENCY_W = 0.15
+# 时间项半衰期：3 年前的论文时间得分 0.5，而非线性归一化的近 0
+_RECENCY_HALFLIFE_DAYS = 365 * 3
+# 语义得分低于此值直接淘汰。原 5 太松，放进了大量边缘论文
+_MIN_RELEVANCE = 7
+
 # 摘要截断长度（LLM 语义分析用，过长影响批处理性能）
 _ABSTRACT_CHARS = 400
 
@@ -176,14 +183,26 @@ class PaperSearchAgent:
     @staticmethod
     def _combined_sort(papers: List[Dict], scores: List[int]) -> List[Dict]:
         """
-        综合排序：combined = 0.6 × rel_norm + 0.4 × date_norm
+        综合排序：combined = (1 - _RECENCY_W) × rel_norm + _RECENCY_W × recency
 
-          rel_norm:  LLM 语义得分 / 10  （0~1）
-          date_norm: (ts - ts_min) / (ts_max - ts_min)，越新越高（0~1）
+        实测问题（docs/E2E_REVIEW.md P-1）：原权重 0.6/0.4 下，输入
+        「ETF截面动量因子」时 rel=7 的 *ChatGPT in Systematic Investing*
+        排到 Top1（combined 0.787），而三篇 rel=8 的真·截面动量论文
+        全部落后（0.645 / 0.645 / 0.480）—— 0.4 的时间权重足以推翻
+        1 分的相关性差距。
 
-        排序结果写入 paper["_relevance_score"] / paper["_combined_score"]。
+        两处修正：
+          1. 时间权重 0.4 → 0.15，相关性重新成为主导项
+          2. 时间项改用【半衰期衰减】而非线性满量程归一化。
+             线性归一化把 2020→2026 拉满 0~1，等于让「新」获得与
+             「相关」同等的话语权；半衰期衰减让 3 年前的论文仍有
+             0.5 权重，只对真正过时的做惩罚。
         """
         from datetime import datetime
+        import math
+
+        now = datetime.now().timestamp()
+        half_life_sec = _RECENCY_HALFLIFE_DAYS * 86400
 
         def _to_ts(date_str: str) -> float:
             try:
@@ -191,22 +210,25 @@ class PaperSearchAgent:
             except Exception:
                 return 0.0
 
-        timestamps = [_to_ts(p.get("date", "")) for p in papers]
-        ts_min = min(timestamps) if timestamps else 0.0
-        ts_max = max(timestamps) if timestamps else 0.0
-        ts_span = ts_max - ts_min
-
         ranked = []
-        for p, s, ts in zip(papers, scores, timestamps):
-            rel_norm  = s / 10.0
-            date_norm = (ts - ts_min) / ts_span if ts_span > 0 else 0.5
-            combined  = 0.6 * rel_norm + 0.4 * date_norm
+        for p, s in zip(papers, scores):
+            ts = _to_ts(p.get("date", ""))
+            rel_norm = s / 10.0
+            if ts > 0:
+                age_sec = max(0.0, now - ts)
+                recency = 0.5 ** (age_sec / half_life_sec)
+            else:
+                recency = 0.3          # 无日期：轻微惩罚，不至于排到最后
+            combined = ((1.0 - _RECENCY_W) * rel_norm) + (_RECENCY_W * recency)
             p = dict(p)
             p["_relevance_score"] = s
-            p["_combined_score"]  = round(combined, 4)
+            p["_recency"] = round(recency, 4)
+            p["_combined_score"] = round(combined, 4)
             ranked.append(p)
 
-        ranked.sort(key=lambda x: x["_combined_score"], reverse=True)
+        # 同分时相关性优先，使时间项只在真正平手时起 tie-break 作用
+        ranked.sort(key=lambda x: (x["_combined_score"], x["_relevance_score"]),
+                    reverse=True)
         return ranked
 
     # ── 关键词提取 & 查询构造 ─────────────────────────────────────────────────
@@ -323,7 +345,7 @@ class PaperSearchAgent:
 
     def _llm_score(self, idea: str,
                    papers: List[Dict],
-                   min_score: int = 5) -> Tuple[List[Dict], List[int]]:
+                   min_score: int = _MIN_RELEVANCE) -> Tuple[List[Dict], List[int]]:
         """
         对每篇论文传入「标题 + 摘要段落」，让 LLM 按语义内容打分（1-10）。
         分批处理（每批 _FILTER_BATCH 篇），防止 token 超限。

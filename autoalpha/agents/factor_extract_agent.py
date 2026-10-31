@@ -25,13 +25,21 @@ Output a JSON array. Each element:
     "fields": ["close", "volume"],
     "lookback_days": 252
   },
-  "parameters": {"lookback": 20}
+  "parameters": {"lookback": 20},
+  "computable": true,
+  "required_fields": ["close", "volume"]
 }
 
 Rules:
 - Only extract factors that are EXPLICITLY described or implied in the abstract
 - Translate Chinese abstracts to English terminology
 - If the paper describes a strategy (not a factor), extract the underlying signal as a factor
+- EVERY factor must be computable from the available data listed in the user message.
+  Papers often use data we do not have (US tickers, VIX, news, fundamentals).
+  When that happens, either restate the signal using only available fields, or
+  set "computable": false and explain in implementation_notes. Never invent a proxy
+  and present it as the paper's signal.
+- Add a "computable" boolean and a "required_fields" list to each factor.
 - Output ONLY valid JSON array, no explanation
 """
 
@@ -42,7 +50,7 @@ class FactorExtractAgent:
     def __init__(self, llm: LLMClient):
         self.llm = llm
 
-    def extract(self, paper: dict) -> List[FactorSpec]:
+    def extract(self, paper: dict, data_context: str = "") -> List[FactorSpec]:
         title = paper.get("title", "")
         abstract = paper.get("abstract", "")
         url = paper.get("pdf_url", "")
@@ -51,6 +59,8 @@ class FactorExtractAgent:
         print(f"[FactorExtract] 解析论文: {title[:60]}")
 
         user_msg = f"Paper title: {title}\n\nAbstract:\n{abstract}"
+        if data_context:
+            user_msg = f"{data_context}\n\n{user_msg}"
         try:
             raw = strip_code_fence(self.llm.complete(system=_EXTRACT_SYSTEM, user=user_msg,
                                                  purpose="extract"))
@@ -74,6 +84,9 @@ class FactorExtractAgent:
                     parameters=item.get("parameters", {}),
                     source_paper={"title": title, "url": url, "date": date, "abstract": abstract[:300]},
                 )
+                # LLM 自报的可计算性，供 orchestrator 做前置过滤
+                spec.computable = bool(item.get("computable", True))
+                spec.required_fields = list(item.get("required_fields", []) or [])
                 specs.append(spec)
             except Exception as e:
                 print(f"[FactorExtract] FactorSpec 构建失败: {e}")

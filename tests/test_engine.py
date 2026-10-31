@@ -224,3 +224,91 @@ def test_coverage_never_exceeds_one():
     ic = compute_ic_metrics(f, px_holed, lags=(1,))
     assert ic.coverage <= 1.0, f"coverage 超过 1: {ic.coverage}"
     assert ic.coverage > 0.5, f"coverage 异常偏低: {ic.coverage}"
+
+
+# ── 数据可用性与池构建（docs/E2E_REVIEW.md P-2 / P-3）────────────────────────
+
+def test_skip_factors_requiring_unavailable_data():
+    """E2E 实测出现的四个因子必须被前置拦下，合法动量因子必须放行。"""
+    from autoalpha.orchestrator import _check_data_available
+    from autoalpha.pipeline_state import FactorSpec
+
+    cols = {"open", "high", "low", "close", "volume", "amount"}
+
+    def spec(name, hyp, formula):
+        return FactorSpec(name, "", hyp, formula, "", {}, {}, {})
+
+    blocked = [
+        spec("vix_stress_relief", "VIX elevated then falling", "vix_ma - vix"),
+        spec("spy_drawdown_depth", "SPY drawdown depth", "1 - spy/cummax(spy)"),
+        spec("llm_news_momentum_score", "news sentiment", "sent * mom"),
+        spec("rate_relief_signal", "interest_rate falling", "d(rate)"),
+    ]
+    for s in blocked:
+        assert _check_data_available(s, cols), f"{s.factor_name} 应被跳过"
+
+    ok = spec("etf_cross_sectional_momentum",
+              "momentum from investor underreaction",
+              "rank(close_t / close_{t-60} - 1)")
+    assert _check_data_available(ok, cols) is None, "合法动量因子被误拦"
+
+
+def test_llm_declared_uncomputable_is_skipped():
+    from autoalpha.orchestrator import _check_data_available
+    from autoalpha.pipeline_state import FactorSpec
+    s = FactorSpec("x", "", "some signal", "f(x)", "needs fundamentals",
+                   {}, {}, {})
+    s.computable = False
+    assert _check_data_available(s, {"close"}) is not None
+
+
+def test_universe_preset_makes_cross_section_comparable():
+    """
+    修 P-3 的契约：默认预设须排除债券/货币等异质资产。
+    实测全池波动极差 200 倍，仅股票类降到 2.2 倍。
+    """
+    from autoalpha.universe import classify, build_universe, PRESETS
+
+    assert classify("国债ETF") == "bond"
+    assert classify("华安张江REIT") == "reit"
+    assert classify("华宝添益ETF") == "money"
+    assert classify("黄金ETF") == "gold"
+    assert classify("南方原油") == "oil"
+    assert classify("沪深300ETF") == "equity"
+    assert classify("可转债ETF") == "bond", "可转债须归债券，不得落入 equity"
+
+    names = {"510300": "沪深300ETF", "511010": "国债ETF",
+             "508000": "华安张江REIT", "518880": "黄金ETF",
+             "511990": "华宝添益ETF"}
+    data = {k: None for k in names}
+    kept, prof = build_universe(data, names, "equity")
+    assert set(kept) == {"510300"}
+    assert prof["n_total"] == 5 and prof["n_kept"] == 1
+    assert set(prof["excluded"]) == {"bond", "reit", "gold", "money"}
+
+
+def test_data_context_forbids_proxies():
+    """注入 prompt 的数据说明必须点名禁止自行代理（修 P-2 的静默代理问题）。"""
+    from autoalpha.universe import describe_for_prompt
+    txt = describe_for_prompt(
+        {"n_kept": 92, "dist_kept": {"equity": 92}, "sample": ["510300 沪深300ETF"]},
+        ["close", "volume"], ("2022-01-04", "2026-02-27"))
+    assert "China" in txt and "NOT US" in txt
+    assert "VIX" in txt and "SPY" in txt
+    assert "DO NOT invent a proxy" in txt
+
+
+def test_recency_does_not_outrank_relevance():
+    """
+    修 P-1 的契约：用 E2E 实测的真实四篇复算，
+    rel=8 的截面动量论文必须排在 rel=7 的新论文之前。
+    """
+    from autoalpha.agents.paper_search_agent import PaperSearchAgent
+    rows = [("ChatGPT in Systematic Investing", 7, "2025-10-30"),
+            ("Transfer Ranking: Cross-Sectional Momentum", 8, "2023-02-21"),
+            ("Building Cross-Sectional Strategies", 8, "2020-12-13")]
+    out = PaperSearchAgent._combined_sort(
+        [{"title": t, "date": d} for t, _, d in rows],
+        [s for _, s, _ in rows])
+    assert out[0]["_relevance_score"] == 8, "相关性更高的论文应排前"
+    assert "ChatGPT" in out[-1]["title"], "rel=7 的论文应排最后"

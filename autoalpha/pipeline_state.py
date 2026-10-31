@@ -15,6 +15,9 @@ class FactorSpec:
     source_paper: Dict            # {"title": ..., "url": ..., "date": ..., "abstract": ...}
     variant_of: Optional[str] = None   # 若是延伸因子，填父因子名
     extension_type: Optional[str] = None  # param_variation / formula_variation / combination
+    # LLM 自报：该因子能否用现有数据算出来（修 E2E_REVIEW P-2）
+    computable: bool = True
+    required_fields: List[str] = field(default_factory=list)
 
 
 @dataclass

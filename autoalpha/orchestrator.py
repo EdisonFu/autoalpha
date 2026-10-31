@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import re
 import traceback
 from typing import Dict, Iterator, List, Optional
 
@@ -22,6 +23,8 @@ from .llm import LLMClient
 from .db import FactorDB
 from .engine import SplitEngine, DATA_START, DATA_END
 from .data_loader import load_klines
+from .universe import (load_names, build_universe, describe_for_prompt,
+                       DEFAULT_PRESET)
 from .agents.input_classifier import classify_input
 from .agents.paper_search_agent import PaperSearchAgent
 from .agents.factor_extract_agent import FactorExtractAgent
@@ -37,7 +40,7 @@ MAX_EXTENSIONS = 3
 class FlowOrchestrator:
     def __init__(self, klines_dir: str = DEFAULT_KLINES, freq: str = "etf-daily",
                  db_path: str = "autoalpha.db", output_dir: str = "./output",
-                 llm_config: dict = None):
+                 llm_config: dict = None, universe_preset: str = DEFAULT_PRESET):
         self.klines_dir = klines_dir
         self.freq = freq
         self.output_dir = output_dir
@@ -51,8 +54,11 @@ class FlowOrchestrator:
         self.extension = FactorExtensionAgent(self.llm)
         self.translate = TranslateAgent(self.llm)
 
+        self.universe_preset = universe_preset
         self._engine: Optional[SplitEngine] = None
         self._raw_data: Optional[Dict] = None
+        self._profile: Dict = {}
+        self._data_context: str = ""
 
     # ── 阶段 1：论文检索 ────────────────────────────────────────────────────
 
@@ -108,7 +114,7 @@ class FlowOrchestrator:
                 f"解析论文 {i}/{len(selected)}: {paper.get('title','')[:50]}",
                 {"current": i, "total": len(selected)}))
             try:
-                specs.extend(self.extract.extract(paper))
+                specs.extend(self.extract.extract(paper, self._data_context))
             except Exception as e:
                 yield sess.record(FlowEvent(EventKind.LOG, Stage.EXTRACT,
                                             f"解析失败: {e}"))
@@ -140,8 +146,17 @@ class FlowOrchestrator:
             yield sess.record(FlowEvent(EventKind.LOG, Stage.DATA, "复用已加载数据"))
         else:
             try:
-                self._raw_data = load_klines(self.klines_dir, self.freq)
+                raw = load_klines(self.klines_dir, self.freq)
+                names = load_names(self.klines_dir, self.freq)
+                # 按资产类别过滤，保证截面可比（修 E2E_REVIEW P-3）
+                self._raw_data, self._profile = build_universe(
+                    raw, names, self.universe_preset)
                 self._engine = SplitEngine(self._raw_data)
+                self._data_context = describe_for_prompt(
+                    self._profile,
+                    ["open", "high", "low", "close", "volume", "amount"],
+                    (self._engine.price_full.index[0].strftime("%Y-%m-%d"),
+                     self._engine.price_full.index[-1].strftime("%Y-%m-%d")))
             except Exception as e:
                 sess.error = f"数据加载失败: {e}"
                 yield sess.record(FlowEvent(EventKind.ERROR, Stage.ERROR, sess.error))
@@ -159,7 +174,11 @@ class FlowOrchestrator:
              "is_days": int(len(e.price_is)), "oos_days": int(len(e.price_oos)),
              "universe_width": round(g["_width"], 1),
              "ic_mean_floor": round(g["ic_mean_floor"], 5),
-             "t_threshold": round(g["t_threshold"], 3)}))
+             "t_threshold": round(g["t_threshold"], 3),
+             "preset": self._profile.get("preset", ""),
+             "n_total": self._profile.get("n_total", 0),
+             "dist_kept": self._profile.get("dist_kept", {}),
+             "excluded": self._profile.get("excluded", [])}))
         yield sess.record(FlowEvent(EventKind.STAGE_END, Stage.DATA, "数据就绪"))
 
     # ── 阶段 4+5：实现 + 评估 ──────────────────────────────────────────────
@@ -178,11 +197,28 @@ class FlowOrchestrator:
         passed_navs = [e.nav_net for e in sess.evaluations
                        if e.status == "PASS" and e.nav_net is not None]
 
+        available = set()
+        for df in list(self._raw_data.values())[:3]:
+            available.update(df.columns.tolist())
+
         for i, spec in enumerate(specs, 1):
             yield sess.record(FlowEvent(
                 EventKind.PROGRESS, Stage.IMPLEMENT,
                 f"[{i}/{len(specs)}] {spec.factor_name}",
                 {"current": i, "total": len(specs), "factor": spec.factor_name}))
+
+            # 数据可用性前置检查（修 E2E_REVIEW P-2/P-4）：
+            # 不可计算的因子直接跳过，不浪费 codegen 调用与回测。
+            # 用户必须能区分「数据没有」和「测了但不达标」。
+            skip = _check_data_available(spec, available)
+            if skip:
+                ev = _skipped_eval(spec.factor_name, skip)
+                sess.evaluations.append(ev)
+                yield sess.record(FlowEvent(
+                    EventKind.DATA, Stage.EVALUATE,
+                    f"{spec.factor_name} → SKIP_NO_DATA",
+                    {"evaluation": evaluation_to_dict(ev)}))
+                continue
 
             factor, err = yield from self._implement_with_retry(sess, spec)
             if factor is None:
@@ -218,12 +254,16 @@ class FlowOrchestrator:
                 {"evaluation": evaluation_to_dict(ev)}))
 
         n_pass = sum(1 for e in sess.evaluations if e.status == "PASS")
+        n_skip = sum(1 for e in sess.evaluations if e.status == "SKIP_NO_DATA")
+        n_tested = len(sess.evaluations) - n_skip
         usage = self.llm.meter.summary()
+        msg = f"完成：{n_pass}/{n_tested} 通过双层门控"
+        if n_skip:
+            msg += f"（另有 {n_skip} 个因数据缺失未测）"
         yield sess.record(FlowEvent(
-            EventKind.STAGE_END, Stage.EVALUATE,
-            f"完成：{n_pass}/{len(sess.evaluations)} 通过双层门控",
+            EventKind.STAGE_END, Stage.EVALUATE, msg,
             {"n_pass": n_pass, "n_total": len(sess.evaluations),
-             "usage": usage}))
+             "n_tested": n_tested, "n_skip": n_skip, "usage": usage}))
 
     def _implement_with_retry(self, sess: FlowSession, spec):
         """生成代码 → 沙箱执行 → 读回因子值。返回 (factor_series|None, err)。"""
@@ -385,6 +425,55 @@ def _cross_section_degenerate(factor: pd.Series, sample_days: int = 60,
         return (f"{flat}/{checked} 个采样日上，截面取值几乎完全相同"
                 f"（唯一值占比 < {min_unique_ratio:.0%}）")
     return None
+
+
+# 论文常用但本数据集没有的东西。命中即判定不可计算。
+_UNAVAILABLE_TOKENS = {
+    "spy", "qqq", "dia", "iwm", "tlt", "gld", "vxx", "ndx", "spx",
+    "vix", "vvix", "move", "skew",
+    "news", "sentiment", "headline", "tweet", "social",
+    "earnings", "eps", "book_value", "pe_ratio", "pb_ratio", "roe", "roa",
+    "fundamental", "analyst", "estimate", "revision",
+    "interest_rate", "yield_curve", "treasury", "fed", "cpi", "gdp", "macro",
+    "order_book", "bid_ask", "tick", "intraday", "minute",
+    "market_cap", "shares_outstanding", "float",
+}
+
+
+def _check_data_available(spec, available_cols: set) -> Optional[str]:
+    """
+    返回 None 表示可计算，否则返回不可计算的原因。
+
+    三道判断：
+      1. LLM 自报 computable=False
+      2. required_fields 里有本数据集没有的列
+      3. 因子名/假设/公式里出现明确不可得的数据源（SPY/VIX/news/...）
+
+    第 3 条是必要的兜底：实测 LLM 会一边说 computable=true，
+    一边在代码里给 VIX 编一个代理变量（且沿用美股校准的阈值 25.0）。
+    """
+    if not getattr(spec, "computable", True):
+        return f"LLM 标记为不可计算: {spec.implementation_notes[:150]}"
+
+    req = {f.lower() for f in (getattr(spec, "required_fields", None) or [])}
+    avail = {c.lower() for c in available_cols}
+    missing = {f for f in req if f not in avail and f in _UNAVAILABLE_TOKENS}
+    if missing:
+        return f"需要本数据集不存在的字段: {', '.join(sorted(missing))}"
+
+    blob = " ".join([spec.factor_name, spec.hypothesis, spec.formula,
+                     spec.description]).lower()
+    hits = {t for t in _UNAVAILABLE_TOKENS
+            if re.search(rf"(?<![a-z0-9_]){re.escape(t)}(?![a-z0-9_])", blob)}
+    if hits:
+        return f"引用了不可得的数据源: {', '.join(sorted(hits))}"
+    return None
+
+
+def _skipped_eval(name: str, reason: str):
+    from .metrics import FactorEvaluation
+    return FactorEvaluation(factor_name=name, status="SKIP_NO_DATA",
+                            fail_reason=reason)
 
 
 def _failed_eval(name: str, reason: str):

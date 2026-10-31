@@ -108,6 +108,8 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   padding:15px;margin-bottom:12px}
 .fx.pass{border-left:3px solid var(--ok)}
 .fx.fail{border-left:3px solid var(--bad)}
+.fx.skip{border-left:3px solid var(--fg2);opacity:.78}
+.tag.skip{background:rgba(141,162,196,.17);color:var(--fg2)}
 .fx .hd{display:flex;justify-content:space-between;align-items:center;gap:10px;
   flex-wrap:wrap;margin-bottom:12px}
 .fx .nm{font-size:14px;font-weight:600;font-family:var(--mono)}
@@ -280,6 +282,12 @@ function panel(id,html){
 }
 
 function showData(p){
+  const ex=(p.excluded||[]).length
+    ? `<div class="note">截面池 <code>${esc(p.preset||'equity')}</code>：
+       从 ${p.n_total} 只中保留 <b>${p.n_symbols}</b> 只，
+       排除 <code>${(p.excluded||[]).join(', ')}</code>。
+       异质资产（债券波动~2% vs 股票~25%）同池排序会让结果被资产类别主导，
+       而非因子强弱。</div>` : '';
   panel('pData',`<h3>数据与样本切分 <span class="badge">${p.n_symbols} 标的</span></h3>
   <div class="grid">
     <div class="kv"><div class="k">交易日</div><div class="v">${p.n_days}</div></div>
@@ -289,6 +297,7 @@ function showData(p){
     <div class="kv"><div class="k">IC 门槛</div><div class="v">${fmt(p.ic_mean_floor,4)}</div></div>
     <div class="kv"><div class="k">t 门槛</div><div class="v">${fmt(p.t_threshold,2)}</div></div>
   </div>
+  ${ex}
   <div class="note">样本内 <code>${p.is_range[0]} ~ ${p.is_range[1]}</code>，
   禁运 21 日后样本外 <code>${p.oos_range[0]} ~ ${p.oos_range[1]}</code>。
   IC 门槛由截面宽度推导（<code>t/√n/√width</code>），不是硬编码常量。</div>`);
@@ -429,11 +438,19 @@ function pane(title,ic,lm,extra=''){
 
 function showEvals(){
   const nP=evals.filter(e=>e.status==='PASS').length;
-  panel('pEval',`<h3>回测结果 <span class="badge">${nP}/${evals.length} 通过</span></h3>
+  const nS=evals.filter(e=>e.status==='SKIP_NO_DATA').length;
+  const nT=evals.length-nS;
+  const badge=nS?`${nP}/${nT} 通过 · ${nS} 未测`:`${nP}/${nT} 通过`;
+  panel('pEval',`<h3>回测结果 <span class="badge">${badge}</span></h3>
     ${evals.map(e=>{
-      const p=e.status==='PASS';
+      const sk=e.status==='SKIP_NO_DATA', p=e.status==='PASS';
+      const cls=sk?'skip':(p?'pass':'fail');
       const dec=e.sharpe_decay!=null?`<span>衰减 ${(e.sharpe_decay*100).toFixed(1)}%</span>`:'';
-      return `<div class="fx ${p?'pass':'fail'}">
+      if(sk) return `<div class="fx skip">
+        <div class="hd"><span class="nm">${esc(e.factor_name)}</span>
+          <span class="tag skip">未测（数据缺失）</span></div>
+        <div class="reason">${esc(e.fail_reason)}</div></div>`;
+      return `<div class="fx ${cls}">
         <div class="hd"><span class="nm">${esc(e.factor_name)}</span>
           <span class="tag ${p?'pass':'fail'}">${e.status}</span></div>
         ${e.nav&&e.nav.length?sparkline(e.nav):''}
