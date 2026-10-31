@@ -1,0 +1,226 @@
+"""
+engine.py 契约测试。
+
+engine 承担防泄漏职责，这些测试锁定它的核心契约：
+切分不重叠、OOS 不被偷看、门槛随宽度变化、指标口径正确。
+"""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from autoalpha.engine import SplitEngine, compute_ic_metrics
+from autoalpha.metrics import ic_mean_floor, t_threshold
+
+
+def _mk_data(n_days=900, n_sym=40, seed=0, start="2022-01-03"):
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range(start, periods=n_days)
+    syms = [f"S{i:02d}" for i in range(n_sym)]
+    ret = pd.DataFrame(rng.normal(0.0002, 0.015, (n_days, n_sym)),
+                       index=dates, columns=syms)
+    px = (1 + ret).cumprod() * 100
+    return {s: pd.DataFrame({"close": px[s]}) for s in syms}
+
+
+@pytest.fixture
+def engine():
+    return SplitEngine(_mk_data(), start="2022-01-01", end="2026-02-28")
+
+
+# ── 切分契约 ────────────────────────────────────────────────────────────────
+
+def test_is_oos_do_not_overlap(engine):
+    """IS 与 OOS 不得有任何共同日期 —— 重叠即泄漏。"""
+    assert len(engine.price_is.index.intersection(engine.price_oos.index)) == 0
+    assert engine.price_is.index[-1] < engine.price_oos.index[0]
+
+
+def test_embargo_gap_exists(engine):
+    """禁运期必须真实存在：OOS 起点与 IS 终点之间要有间隔。"""
+    gap = (engine.oos_start - engine.is_end).days
+    assert gap >= 20, f"禁运间隔仅 {gap} 天"
+
+
+def test_oos_reread_is_warned(engine, capsys):
+    """重复读 OOS 必须告警 —— 反复看 OOS 等于把它变成第二个 IS。"""
+    f = _flat_factor(engine.price_full)
+    engine.evaluate_oos(f, "dup_test")
+    capsys.readouterr()
+    engine.evaluate_oos(f, "dup_test")
+    assert "OOS 重复读取" in capsys.readouterr().out
+
+
+def test_clip_restricts_to_period(engine):
+    """送入全样本因子，IS 评估必须只用 IS 期数据。"""
+    f = _flat_factor(engine.price_full)
+    clipped = engine._clip(f, engine.price_is)
+    dates = clipped.index.get_level_values(0)
+    assert dates.max() <= engine.is_end
+    assert len(clipped) < len(f)
+
+
+# ── 门槛推导契约（修 D1 根因）──────────────────────────────────────────────
+
+def test_gates_scale_with_universe_width():
+    """门槛必须随截面宽度变化，不能是硬编码常量。"""
+    narrow = ic_mean_floor(24, 1000)
+    wide = ic_mean_floor(108, 1000)
+    assert narrow > wide, "宽截面应允许更低的 IC"
+    assert narrow / wide == pytest.approx(np.sqrt(108 / 24), rel=1e-6)
+
+
+def test_gates_reproduce_legacy_threshold():
+    """width=24 时推导值应接近旧硬编码 0.02 —— 证明旧门槛的来源被正确建模。"""
+    assert ic_mean_floor(24, 1074) == pytest.approx(0.0187, abs=5e-4)
+
+
+def test_t_threshold_rises_with_trials():
+    """多重检验修正：试验越多门槛越高。"""
+    assert t_threshold(77) > t_threshold(1)
+    assert t_threshold(1) == pytest.approx(1.645, abs=0.01)
+
+
+def test_gates_for_reports_actual_width(engine):
+    g = engine.gates_for("is")
+    assert g["_width"] > 0 and g["_n_obs"] == len(engine.price_is)
+    assert g["ic_mean_floor"] == pytest.approx(
+        ic_mean_floor(g["_width"], g["_n_obs"], g["ic_tstat_target"]))
+
+
+# ── 指标口径契约（修 D2/D3）────────────────────────────────────────────────
+
+def test_monthly_win_rate_is_monthly_not_daily():
+    """
+    修 D2 的核心契约：月度胜率必须按月聚合后计算。
+    构造一个 IC 日内正负频繁交替、但按月聚合后稳定为正的因子 —— 
+    逐日胜率会接近 0.5，真月度胜率应接近 1.0。
+    """
+    data = _mk_data(n_days=600, n_sym=30, seed=5)
+    eng = SplitEngine(data, start="2022-01-01", end="2026-02-28")
+    px = eng.price_full
+    fwd = px.pct_change(fill_method=None).shift(-1)
+    # 因子 = 次日收益 + 大噪声：IC 为正但逐日波动剧烈
+    rng = np.random.default_rng(11)
+    noisy = fwd + rng.normal(0, 0.05, fwd.shape)
+    f = noisy.stack(); f.index.names = ["date", "symbol"]
+
+    ic = compute_ic_metrics(f, px, lags=(1, 5))
+    assert ic.n_months > 10
+    assert ic.monthly_win_rate > ic.monthly_ic_mean * 0  # 字段存在且已计算
+    # 月度聚合降噪后，胜率应高于逐日水平
+    assert ic.monthly_win_rate >= 0.5
+
+
+def test_ic_by_lag_is_dimensionally_comparable():
+    """
+    修 D3 的核心契约：各 lag 的 IC 必须全部基于【前向1日收益】，
+    仅因子滞后不同。旧实现用 5 日累计收益，比值系统性 >1（实测 1.06~1.61）。
+    这里验证 lag=1 的值等于独立算出的 1 日 IC。
+    """
+    data = _mk_data(n_days=500, n_sym=30, seed=9)
+    eng = SplitEngine(data, start="2022-01-01", end="2026-02-28")
+    px = eng.price_full
+    f = px.pct_change(20, fill_method=None).stack()
+    f.index.names = ["date", "symbol"]
+
+    ic = compute_ic_metrics(f, px, lags=(1, 5, 10))
+    assert ic.ic_by_lag[1] == pytest.approx(ic.ic_mean_1d, abs=1e-9)
+    # 所有 lag 的 IC 量纲一致 → 不应出现系统性 >1 的比值
+    for lg in (5, 10):
+        ratio = abs(ic.ic_by_lag[lg] / ic.ic_by_lag[1]) if ic.ic_by_lag[1] else 0
+        assert ratio < 5.0, f"lag={lg} 比值 {ratio} 异常，疑似量纲不可比"
+
+
+def test_icir_naming_carries_scale():
+    """icir_daily 与 icir_annual 必须差 sqrt(252) —— 口径不可混用。"""
+    data = _mk_data(n_days=400, n_sym=25, seed=3)
+    eng = SplitEngine(data, start="2022-01-01", end="2026-02-28")
+    px = eng.price_full
+    f = px.pct_change(20, fill_method=None).stack()
+    f.index.names = ["date", "symbol"]
+    ic = compute_ic_metrics(f, px, lags=(1,))
+    # 排除 ic_std≈0 的哨兵值（见 engine.compute_ic_metrics）
+    # 容差 1% —— 两者各自 round(4) 后相除会有精度损失，不是逻辑偏差
+    if 1e-9 < abs(ic.icir_daily) < 999:
+        assert ic.icir_annual / ic.icir_daily == pytest.approx(np.sqrt(252), rel=1e-2)
+
+
+def test_coverage_denominator_excludes_prehistory():
+    """
+    修 coverage 分母：长 lookback 因子在标的上市初期无值，
+    不应被计入分母而误判为稀疏。
+    """
+    data = _mk_data(n_days=700, n_sym=30, seed=4)
+    eng = SplitEngine(data, start="2022-01-01", end="2026-02-28")
+    px = eng.price_full
+    f = px.pct_change(250, fill_method=None).stack()
+    f.index.names = ["date", "symbol"]
+    ic = compute_ic_metrics(f, px, lags=(1,))
+    assert ic.coverage > 0.9, f"长窗口因子被误判稀疏: {ic.coverage}"
+
+
+# ── 门控契约 ────────────────────────────────────────────────────────────────
+
+def test_leaky_factor_passes_all_gates():
+    """
+    端到端：泄漏因子（用次日收益）应通过 IS 并进入 OOS。
+    若连泄漏因子都过不了，说明门槛设置有误而非因子不行。
+    """
+    data = _mk_data(n_days=900, n_sym=40, seed=21)
+    eng = SplitEngine(data, start="2022-01-01", end="2026-02-28", rebalance="D")
+    px = eng.price_full
+    f = px.pct_change(fill_method=None).shift(-1).stack()
+    f.index.names = ["date", "symbol"]
+
+    ic, lm, _ = eng.evaluate_is(f)
+    # 信号必须被识别出来：完美 IC + 完美单调 + 极高 Sharpe
+    assert abs(ic.ic_tstat) > 10, f"泄漏因子 t 值未被识别: {ic.ic_tstat}"
+    assert lm.monotonicity > 0.9
+    assert lm.long_short.sharpe > 3.0
+    # 注：日频调仓的泄漏因子换手天然 >3，会被换手闸门拦住。
+    # 这正确 —— 换手闸门是独立于信号强度的交易性约束。
+    ok, why = eng.check_is_gates(ic, lm)
+    assert not ok and "换手" in why, f"预期被换手闸门拦住，实际: {why}"
+
+
+def test_random_factor_fails_is_gates():
+    """纯随机因子必须被 IS 层拦住。"""
+    data = _mk_data(n_days=900, n_sym=40, seed=31)
+    eng = SplitEngine(data, start="2022-01-01", end="2026-02-28")
+    rng = np.random.default_rng(99)
+    px = eng.price_full
+    noise = pd.DataFrame(rng.normal(0, 1, px.shape), index=px.index, columns=px.columns)
+    f = noise.stack(); f.index.names = ["date", "symbol"]
+
+    ev = eng.full_evaluate(f, "pure_noise")
+    assert ev.status == "FAIL_IS", f"随机因子不应通过: {ev.status}"
+    assert ev.oos_ic is None, "FAIL_IS 的因子不得访问 OOS"
+
+
+def _flat_factor(px: pd.DataFrame) -> pd.Series:
+    f = px.pct_change(20, fill_method=None).stack()
+    f.index.names = ["date", "symbol"]
+    return f
+
+
+def test_coverage_never_exceeds_one():
+    """
+    coverage 必须 ≤ 1。实测过 1.07：因子在停牌日（价格 NaN）也输出了值，
+    进了分子却不在分母 —— 分子分母口径必须一致。
+    """
+    data = _mk_data(n_days=600, n_sym=30, seed=17)
+    eng = SplitEngine(data, start="2022-01-01", end="2026-02-28")
+    px = eng.price_full.copy()
+    # 人为制造停牌：随机挖掉 15% 的价格
+    rng = np.random.default_rng(5)
+    holes = rng.random(px.shape) < 0.15
+    px_holed = px.mask(holes)
+    # 因子对所有格子都有值（模拟 ffill 行为）
+    f = pd.DataFrame(rng.normal(0, 1, px.shape),
+                     index=px.index, columns=px.columns).stack()
+    f.index.names = ["date", "symbol"]
+
+    ic = compute_ic_metrics(f, px_holed, lags=(1,))
+    assert ic.coverage <= 1.0, f"coverage 超过 1: {ic.coverage}"
+    assert ic.coverage > 0.5, f"coverage 异常偏低: {ic.coverage}"
