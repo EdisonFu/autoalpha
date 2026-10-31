@@ -1,6 +1,7 @@
 import json
 from ..llm import LLMClient
 from ..pipeline_state import FactorSpec, FactorResult
+from ..json_repair import loads_lenient, JSONRepairError
 from ..utils import strip_code_fence
 
 _JUDGE_SYSTEM = """\
@@ -62,18 +63,20 @@ class FactorJudgeAgent:
         user_msg = self._build_prompt(spec, result, code_path)
 
         try:
-            raw = strip_code_fence(self.llm.complete(
+            raw = self.llm.complete(
                 system=_JUDGE_SYSTEM, user=user_msg, temperature=0.2,
-                purpose="judge"
-            ))
-            verdict = json.loads(raw)
+                purpose="judge")
+            verdict = loads_lenient(raw, expect=dict)
         except Exception as e:
-            print(f"[Judge] 评审解析失败: {e}，默认 APPROVE")
+            # fail-closed：原实现解析失败就默认 APPROVE，等于让一次解析故障
+            # 放过一个未经语义审查的因子。审查缺失应当拒绝，而非放行。
+            print(f"[Judge] 评审解析失败: {str(e)[:200]} → REJECT（fail-closed）")
             return {
-                "verdict": "APPROVE", "overall_score": 7.0,
-                "rejection_reason": "", "improvement_suggestions": "",
-                "economic_soundness": 7.0, "implementation_fidelity": 7.0,
-                "novelty": 7.0, "overfitting_risk": 7.0,
+                "verdict": "REJECT", "overall_score": 0.0,
+                "rejection_reason": f"语义评审未能完成: {str(e)[:150]}",
+                "improvement_suggestions": "重试评审，或检查 LLM 输出格式",
+                "economic_soundness": 0.0, "implementation_fidelity": 0.0,
+                "novelty": 0.0, "overfitting_risk": 0.0,
             }
 
         # Enforce verdict rules (LLM may not always follow them exactly)

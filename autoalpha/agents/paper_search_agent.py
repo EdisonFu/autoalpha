@@ -5,6 +5,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Tuple, Optional
 from ..llm import LLMClient
+from ..json_repair import loads_lenient, JSONRepairError
 from ..utils import strip_code_fence
 
 # arXiv 每次最多拉取的论文数
@@ -245,9 +246,10 @@ class PaperSearchAgent:
         """
         raw = idea
         try:
-            raw = strip_code_fence(self.llm.complete(system=_KW_SYSTEM, user=f"Research idea: {idea}",
-                                              purpose="keyword"))
-            kw = json.loads(raw)
+            raw = self.llm.complete(system=_KW_SYSTEM,
+                                    user=f"Research idea: {idea}",
+                                    purpose="keyword")
+            kw = loads_lenient(raw, expect=dict)
             if isinstance(kw.get("title_terms"), list) and kw["title_terms"]:
                 return {
                     "title_terms":    kw["title_terms"],
@@ -374,9 +376,11 @@ class PaperSearchAgent:
                     purpose="score",
                 ).strip()
 
-                m = re.search(r"\[\s*[\d,\s]+\]", raw)
-                if m:
-                    batch_scores = [int(s) for s in json.loads(m.group())]
+                try:
+                    batch_scores = [int(x) for x in loads_lenient(raw, expect=list)]
+                except Exception:
+                    batch_scores = []
+                if batch_scores:
                     while len(batch_scores) < len(batch):
                         batch_scores.append(1)
                     all_scores.extend(batch_scores[:len(batch)])

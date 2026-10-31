@@ -2,6 +2,7 @@ import json
 from typing import List
 from ..llm import LLMClient
 from ..pipeline_state import FactorSpec, FactorResult
+from ..json_repair import loads_lenient, JSONRepairError
 from ..utils import strip_code_fence
 
 _EXT_SYSTEM = """\
@@ -59,12 +60,13 @@ class FactorExtensionAgent:
             f"Propose 3-5 extensions that are structurally diverse (not just parameter changes)."
         )
         try:
-            raw = strip_code_fence(self.llm.complete(system=_EXT_SYSTEM, user=user_msg, purpose="extension"))
-            items = json.loads(raw)
+            raw = self.llm.complete(system=_EXT_SYSTEM, user=user_msg,
+                                    purpose="extension")
+            items = loads_lenient(raw, expect=list)
             if not isinstance(items, list):
                 items = [items]
-        except Exception as e:
-            print(f"[Extension] 生成失败: {e}")
+        except (JSONRepairError, Exception) as e:
+            print(f"[Extension] 生成失败: {str(e)[:300]}")
             return []
 
         extensions = []

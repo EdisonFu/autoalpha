@@ -3,6 +3,7 @@ import re
 from typing import List
 from ..llm import LLMClient
 from ..pipeline_state import FactorSpec
+from ..json_repair import loads_lenient, JSONRepairError
 from ..utils import strip_code_fence
 
 _EXTRACT_SYSTEM = """\
@@ -49,6 +50,7 @@ class FactorExtractAgent:
 
     def __init__(self, llm: LLMClient):
         self.llm = llm
+        self.last_error = ""      # 供 orchestrator 把失败原因呈现给用户
 
     def extract(self, paper: dict, data_context: str = "") -> List[FactorSpec]:
         title = paper.get("title", "")
@@ -62,14 +64,23 @@ class FactorExtractAgent:
         if data_context:
             user_msg = f"{data_context}\n\n{user_msg}"
         try:
-            raw = strip_code_fence(self.llm.complete(system=_EXTRACT_SYSTEM, user=user_msg,
-                                                 purpose="extract"))
-            items = json.loads(raw)
-            if not isinstance(items, list):
-                items = [items]
+            raw = self.llm.complete(system=_EXTRACT_SYSTEM, user=user_msg,
+                                    purpose="extract")
         except Exception as e:
-            print(f"[FactorExtract] 解析失败: {e}")
+            print(f"[FactorExtract] LLM 调用失败: {e}")
+            self.last_error = f"LLM 调用失败: {e}"
             return []
+
+        try:
+            items = loads_lenient(raw, expect=list)
+        except JSONRepairError as e:
+            # 这里失败等于「提取到 0 个因子」，整轮白跑，必须让调用方知道
+            print(f"[FactorExtract] JSON 解析失败: {str(e)[:300]}")
+            self.last_error = f"因子假设解析失败: {str(e)[:200]}"
+            return []
+        if not isinstance(items, list):
+            items = [items]
+        self.last_error = ""
 
         specs = []
         for item in items:

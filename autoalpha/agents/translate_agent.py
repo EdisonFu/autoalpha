@@ -10,6 +10,7 @@ import json
 from typing import Dict, List
 
 from ..llm import LLMClient
+from ..json_repair import loads_lenient, JSONRepairError
 from ..utils import strip_code_fence
 
 _PAPER_SYSTEM = """\
@@ -25,7 +26,11 @@ _PAPER_SYSTEM = """\
 - 若摘要信息不足，summary 写「摘要信息不足，需查看全文」
 
 严格输出 JSON 数组，顺序与输入一致，每元素 {"summary": "...", "relevance": "..."}。
-只输出 JSON，不要任何解释。
+
+格式要求（违反会导致解析失败）：
+- 只输出 JSON，前后不要加任何解释文字
+- 字段值内部**不要使用英文双引号**，需要引用时用「」或圆括号
+- 字段值内部不要换行，写成一段连续文字
 """
 
 _FACTOR_SYSTEM = """\
@@ -43,7 +48,11 @@ _FACTOR_SYSTEM = """\
   若实现要点提到去极值/标准化等操作，必须体现，不得写成「无需处理」
 
 严格输出 JSON 数组，顺序与输入一致，每元素 {"what":"...","why":"...","how":"..."}。
-只输出 JSON，不要任何解释。
+
+格式要求（违反会导致解析失败）：
+- 只输出 JSON，前后不要加任何解释文字
+- 字段值内部**不要使用英文双引号**，需要引用时用「」或圆括号
+- 字段值内部不要换行，写成一段连续文字
 """
 
 MAX_ABSTRACT = 600          # 摘要截断，控制输入 token
@@ -96,18 +105,28 @@ class TranslateAgent:
 
     # ── 内部 ───────────────────────────────────────────────────────────────
 
+    FAIL_NOTE = "（中文说明生成失败，请查看运行日志）"
+
     def _call(self, system: str, payload: str, n: int,
               keys: tuple, purpose: str) -> List[Dict]:
-        blank = [{k: "" for k in keys} for _ in range(n)]
+        # 失败时填提示文字而非空串：空串在界面上表现为「中文没了」，
+        # 用户无法区分「没生成」和「生成失败」（实测这正是困惑来源）。
+        def _failed(reason: str) -> List[Dict]:
+            print(f"[Translate] {purpose} 失败: {reason}")
+            first = keys[0]
+            return [{k: (self.FAIL_NOTE if k == first else "") for k in keys}
+                    for _ in range(n)]
+
         try:
-            raw = strip_code_fence(self.llm.complete(
-                system=system, user=payload, temperature=0.3, purpose=purpose))
-            items = json.loads(raw)
-            if not isinstance(items, list):
-                return blank
+            raw = self.llm.complete(system=system, user=payload,
+                                    temperature=0.3, purpose=purpose)
         except Exception as e:
-            print(f"[Translate] {purpose} 失败（非致命）: {e}")
-            return blank
+            return _failed(f"LLM 调用异常: {e}")
+
+        try:
+            items = loads_lenient(raw, expect=list)
+        except JSONRepairError as e:
+            return _failed(f"JSON 解析失败: {str(e)[:200]}")
 
         # 对齐长度：LLM 可能少给或多给
         result = []
