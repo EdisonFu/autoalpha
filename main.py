@@ -6,15 +6,16 @@ AutoAlpha 多Agent流水线入口
 import sys
 import os
 import json
+from dataclasses import asdict
 
-try:
-    import readline  # noqa: F401  — 启用上下键历史
-except ImportError:
-    pass
+if sys.platform != "darwin":
+    try:
+        import readline  # noqa: F401  — 启用上下键历史
+    except ImportError:
+        pass
 
-from autoalpha.llm import LLMClient
-from autoalpha.db import AutoAlphaDB
-from autoalpha.pipeline import Pipeline
+from autoalpha.pipeline import AutoAlphaPipeline
+from autoalpha.pipeline_state import FactorReport, FactorResult
 from autoalpha.agents.input_classifier import classify_input
 
 
@@ -119,39 +120,52 @@ def _select_papers(papers: list) -> list:
 
 # ── 结果打印 ──────────────────────────────────────────────────────────────────
 
-def _print_result(result: dict):
-    status = result.get("status", "UNKNOWN")
-    if status == "CACHED":
-        print("\n  ✓ 命中历史记录，已跳过复现")
-        rec = result.get("record", {})
-        print(f"    策略：{rec.get('strategy_name', 'N/A')}")
-        print(f"    OOS Sharpe：{rec.get('oos_sharpe', 'N/A')}")
+def _print_factor_metrics(title: str, results: list[FactorResult]):
+    if not results:
         return
 
-    if status != "PASS":
-        print(f"\n  ✗ 流水线未通过（{status}）")
-        print(f"    原因：{result.get('reason') or result.get('fail_context', 'N/A')}")
-        return
-
-    paper_url = result.get("paper_url", "")
-    paper_title = result.get("paper_title", "")
-    report_path = result.get("report_path", "")
-
-    print(f"\n  ✓ 质控通过！")
-    print(f"    策略名称  ：{result.get('strategy_name', 'N/A')}")
-    if paper_title:
-        print(f"    论文标题  ：{paper_title}")
-    if paper_url:
-        print(f"    论文链接  ：{paper_url}")
-    is_s = result.get("is_sharpe")
-    oos_s = result.get("oos_sharpe")
-    print(f"    IS  Sharpe：{is_s:.3f}" if isinstance(is_s, float) else "    IS  Sharpe：N/A")
-    print(f"    OOS Sharpe：{oos_s:.3f}" if isinstance(oos_s, float) else "    OOS Sharpe：N/A")
-    if report_path:
-        print(f"    HTML 报告 ：{os.path.abspath(report_path)}")
+    print(f"\n  {title}")
+    for result in results:
+        print(f"    - {result.factor_name} [{result.status}]")
+        print(
+            "      "
+            f"IC={result.ic_mean:.4f}  "
+            f"ICIR={result.icir:.4f}  "
+            f"Decay={result.ic_decay_ratio:.4f}  "
+            f"Coverage={result.coverage:.4f}  "
+            f"WinRate={result.monthly_win_rate:.4f}  "
+            f"MaxCorr={result.max_correlation:.4f}"
+        )
+        if result.fail_reason:
+            print(f"      原因：{result.fail_reason}")
+        if result.code_path:
+            print(f"      文件：{os.path.abspath(result.code_path)}")
 
 
-def _print_comparison(results: list):
+def _print_result(report: FactorReport):
+    passed_count = len(report.passed)
+    failed_count = len(report.failed)
+    ext_count = len(report.extensions_passed)
+    paper = report.papers_used[0] if report.papers_used else {}
+
+    print("\n  ✓ 流水线执行完成")
+    if paper.get("title"):
+        print(f"    论文标题  ：{paper['title']}")
+    if paper.get("pdf_url"):
+        print(f"    论文链接  ：{paper['pdf_url']}")
+    print(f"    提取因子数：{report.total_extracted}")
+    print(f"    通过因子数：{passed_count}")
+    print(f"    失败因子数：{failed_count}")
+    print(f"    延伸通过数：{ext_count}")
+    if report.report_path:
+        print(f"    HTML 报告 ：{os.path.abspath(report.report_path)}")
+
+    _print_factor_metrics("通过因子指标：", report.passed)
+    _print_factor_metrics("失败因子指标：", report.failed)
+    _print_factor_metrics("延伸因子指标：", report.extensions_passed)
+
+
+def _print_comparison(results: list[FactorReport]):
     """多篇论文对比汇总"""
     if len(results) < 2:
         return
@@ -159,18 +173,14 @@ def _print_comparison(results: list):
     print("\n" + "=" * W)
     print(f"{'  多论文对比汇总':^{W}}")
     print("=" * W)
-    fmt = "  {:<32}  {:<8}  {:>9}  {:>9}"
-    print(fmt.format("策略/论文", "状态", "IS Sharpe", "OOS Sharpe"))
+    fmt = "  {:<32}  {:>8}  {:>8}  {:>8}"
+    print(fmt.format("论文", "提取", "通过", "延伸"))
     print("  " + "-" * (W - 2))
     for r in results:
-        name = (r.get("paper_title") or r.get("strategy_name") or "Unknown")[:32]
-        status = r.get("status", "N/A")
-        is_s = r.get("is_sharpe")
-        oos_s = r.get("oos_sharpe")
-        is_str = f"{is_s:.3f}" if isinstance(is_s, float) else "N/A"
-        oos_str = f"{oos_s:.3f}" if isinstance(oos_s, float) else "N/A"
-        url = r.get("paper_url", "")
-        print(fmt.format(name, status, is_str, oos_str))
+        paper = r.papers_used[0] if r.papers_used else {}
+        name = (paper.get("title") or r.idea or "Unknown")[:32]
+        print(fmt.format(name, r.total_extracted, len(r.passed), len(r.extensions_passed)))
+        url = paper.get("pdf_url", "")
         if url:
             print(f"    {url}")
     print("=" * W)
@@ -178,14 +188,38 @@ def _print_comparison(results: list):
 
 # ── 主逻辑 ───────────────────────────────────────────────────────────────────
 
+def _serve_web(argv):
+    """启动 Web 控制台。详见 README_WEB.md。"""
+    port = 8000
+    host = "127.0.0.1"
+    for i, a in enumerate(argv):
+        if a == "--port" and i + 1 < len(argv):
+            port = int(argv[i + 1])
+        if a == "--host" and i + 1 < len(argv):
+            host = argv[i + 1]
+    import os
+    from autoalpha.server import serve
+    key = any(os.environ.get(k) for k in
+              ("ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"))
+    klines = os.environ.get("AUTOALPHA_KLINES")
+    print("\n" + "=" * 54, flush=True)
+    print(f"  AutoAlpha Web  →  http://{host}:{port}", flush=True)
+    print("=" * 54, flush=True)
+    print(f"  LLM API Key : {'已配置' if key else '未配置 ⚠ 请设置 ANTHROPIC_API_KEY'}",
+          flush=True)
+    print(f"  数据目录     : {klines or '(默认) factor-signal/data/klines'}", flush=True)
+    print("  停止服务     : Ctrl+C\n", flush=True)
+    serve(host=host, port=port)
+
+
 def main():
-    llm = LLMClient()
-    db = AutoAlphaDB(db_path="autoalpha.db")
-    pipeline = Pipeline(
-        llm=llm,
-        db=db,
-        output_dir="./paper/research",
-        data_cache_dir="./data_cache",
+    if "--web" in sys.argv:
+        _serve_web(sys.argv[1:])
+        return
+
+    pipeline = AutoAlphaPipeline(
+        db_path="autoalpha.db",
+        output_dir="./output",
     )
 
     if len(sys.argv) > 1:
@@ -194,7 +228,7 @@ def main():
         print(f"[AutoAlpha] Running pipeline for: {raw_input[:100]}")
         result = pipeline.run(raw_input)
         print("\n[AutoAlpha] Result:")
-        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+        print(json.dumps(asdict(result), indent=2, ensure_ascii=False, default=str))
         return
 
     # ── 交互模式 ──────────────────────────────────────────────────────────────
@@ -218,7 +252,7 @@ def main():
         # idea 模式 → 先搜索论文，让用户选择
         if input_type == "idea" and confidence >= 0.6:
             print(f"\n[搜索] 正在搜索相关论文（confidence={confidence:.2f}）…")
-            papers = pipeline.search_papers(raw, max_results=10)
+            papers, _ = pipeline.search_papers_paged(raw, page=1, page_size=10)
 
             if papers:
                 selected = _select_papers(papers)
@@ -232,7 +266,7 @@ def main():
                     results = []
                     for paper in selected:
                         print(f"\n[流水线] 处理论文：{paper['title'][:60]}")
-                        result = pipeline.run(raw, selected_paper=paper)
+                        result = pipeline.run(raw, selected_papers=[paper])
                         results.append(result)
                         _print_result(result)
                     _print_comparison(results)
