@@ -63,21 +63,39 @@ class FlowOrchestrator:
     # ── 阶段 1：论文检索 ────────────────────────────────────────────────────
 
     def search_papers(self, sess: FlowSession, idea: str,
-                      max_results: int = 10) -> Iterator[FlowEvent]:
+                      max_results: int = 10, page: int = 1
+                      ) -> Iterator[FlowEvent]:
         sess.idea = idea
-        yield sess.record(FlowEvent(EventKind.STAGE_START, Stage.SEARCH,
-                                    f"检索与「{idea}」相关的论文"))
+        more = page > 1
+        yield sess.record(FlowEvent(
+            EventKind.STAGE_START, Stage.SEARCH,
+            f"加载第 {page} 批论文" if more else f"检索与「{idea}」相关的论文"))
         kind, conf = classify_input(idea)
-        yield sess.record(FlowEvent(EventKind.LOG, Stage.SEARCH,
-                                    f"输入类型={kind} 置信度={conf:.2f}"))
+        if not more:
+            yield sess.record(FlowEvent(EventKind.LOG, Stage.SEARCH,
+                                        f"输入类型={kind} 置信度={conf:.2f}"))
         papers: List[Dict] = []
+        total = 0
         if kind == "idea" and conf >= 0.6:
             try:
-                papers, _ = self.paper_search.search(idea, max_results=max_results)
+                # search_paged 内部按 idea 缓存，翻页不重复调 arXiv 与 LLM 打分
+                papers, total = self.paper_search.search_paged(
+                    idea, page=page, page_size=max_results)
             except Exception as e:
                 yield sess.record(FlowEvent(EventKind.LOG, Stage.SEARCH,
                                             f"检索失败，改用原始想法: {e}"))
-        sess.papers = papers
+        sess.paper_total = total
+        if papers:
+            sess.paper_page = page
+            sess.papers = papers
+        elif page > 1:
+            # 这一批为空：保留上一批，不要把列表清掉
+            yield sess.record(FlowEvent(
+                EventKind.LOG, Stage.SEARCH,
+                f"没有更多论文了（共 {total} 篇，已全部加载）"))
+            papers = sess.papers
+        else:
+            sess.papers = papers
 
         zh: List[Dict] = []
         if papers:
@@ -85,9 +103,14 @@ class FlowOrchestrator:
                                         f"生成 {len(papers)} 篇中文概述（批量单次调用）"))
             zh = self.translate.describe_papers(papers)
 
+        base = (page - 1) * max_results if papers else 0
+        has_more = bool(papers) and total > base + len(papers)
         yield sess.record(FlowEvent(
-            EventKind.DATA, Stage.SEARCH, f"找到 {len(papers)} 篇论文",
-            {"papers": [{"idx": i, "title": p.get("title", ""),
+            EventKind.DATA, Stage.SEARCH,
+            f"找到 {len(papers)} 篇论文" + (f"（第 {page} 批，共 {total} 篇）"
+                                         if total > len(papers) else ""),
+            {"page": page, "total": total, "has_more": has_more,
+             "papers": [{"idx": base + i, "title": p.get("title", ""),
                          "url": p.get("pdf_url", ""), "date": p.get("date", ""),
                          "abstract": (p.get("abstract") or "")[:400],
                          "zh_summary": (zh[i].get("summary", "") if i < len(zh) else ""),
@@ -97,8 +120,20 @@ class FlowOrchestrator:
 
     # ── 阶段 2：提取因子假设 ────────────────────────────────────────────────
 
+    def papers_by_index(self, sess: FlowSession, idxs: List[int]) -> List[Dict]:
+        """按全局索引取论文（支持跨页选择）。"""
+        allp = self.paper_search._get_results(sess.idea) if sess.idea else []
+        out = []
+        for i in idxs:
+            if 0 <= i < len(allp):
+                out.append(allp[i])
+            elif 0 <= i < len(sess.papers):
+                out.append(sess.papers[i])
+        return out
+
     def extract_specs(self, sess: FlowSession,
-                      selected: List[Dict]) -> Iterator[FlowEvent]:
+                      selected: List[Dict],
+                      append: bool = False) -> Iterator[FlowEvent]:
         yield sess.record(FlowEvent(EventKind.STAGE_START, Stage.EXTRACT, "提取因子假设"))
         if not selected:
             selected = [{"title": sess.idea, "abstract": sess.idea,
@@ -118,7 +153,8 @@ class FlowOrchestrator:
             except Exception as e:
                 yield sess.record(FlowEvent(EventKind.LOG, Stage.EXTRACT,
                                             f"解析失败: {e}"))
-        sess.specs = specs
+        base_n = len(sess.specs) if append else 0
+        sess.specs = (sess.specs + specs) if append else specs
 
         zh: List[Dict] = []
         if specs:
@@ -129,7 +165,8 @@ class FlowOrchestrator:
 
         yield sess.record(FlowEvent(
             EventKind.DATA, Stage.EXTRACT, f"提取到 {len(specs)} 个因子假设",
-            {"specs": [{"idx": i, "factor_name": sp.factor_name,
+            {"append": append,
+             "specs": [{"idx": base_n + i, "factor_name": sp.factor_name,
                         "description": sp.description, "hypothesis": sp.hypothesis,
                         "formula": sp.formula, "parameters": sp.parameters,
                         "zh_what": (zh[i].get("what", "") if i < len(zh) else ""),
@@ -403,6 +440,18 @@ def _sparse_dates(factor: pd.Series, engine, min_ratio: float = 0.5) -> Optional
     if expected and got / expected < min_ratio:
         return (f"因子仅覆盖 {got}/{expected} 个交易日（{got/expected:.1%}）—— "
                 f"疑似自行做了月末/周末重采样")
+
+    # 日期齐全但绝大多数格子是 NaN：条件触发型因子（如"涨停后"）
+    # 在 ETF 上几乎从不触发。实测 limit_up_volume_strength 仅 4.6% 的日期有值。
+    try:
+        wide = factor.unstack(level=-1)
+        live = (wide.notna().sum(axis=1) >= 3).sum()
+        if len(wide) and live / len(wide) < 0.3:
+            return (f"因子只在 {live}/{len(wide)} 个日期（{live/len(wide):.1%}）"
+                    f"有足够取值 —— 触发条件过于罕见，无法支撑逐日截面排序。"
+                    f"ETF 不存在涨跌停，个股专属的极端事件条件在此数据上几乎不触发。")
+    except Exception:
+        pass
     return None
 
 
@@ -421,21 +470,26 @@ def _cross_section_degenerate(factor: pd.Series, sample_days: int = 60,
         return None
     if wide.empty or wide.shape[1] < 3:
         return None
-    rows = wide.iloc[::max(1, len(wide) // sample_days)]
-    flat = 0
-    checked = 0
-    for _, row in rows.iterrows():
-        v = row.dropna()
-        if len(v) < 3:
-            continue
-        checked += 1
-        if v.nunique() / len(v) < min_unique_ratio:
-            flat += 1
-    if checked == 0:
-        return "所有采样日的有效标的数均不足 3 个"
+
+    # 只在【确实有值】的日期上采样。因子常在早期历史全为 NaN
+    # （lookback 未满、标的未上市），若按全样本等间隔取点，
+    # 采样点会大量落进空白区，导致判定只基于个位数的有效日。
+    # 实测 limit_up_volume_strength：61 个采样点里仅 3 个有效。
+    usable = wide[wide.notna().sum(axis=1) >= 3]
+    if usable.empty:
+        return "因子在所有日期上的有效标的数均不足 3 个"
+
+    rows = usable.iloc[::max(1, len(usable) // sample_days)]
+    flat = sum(1 for _, r in rows.iterrows()
+               if (v := r.dropna()).nunique() / len(v) < min_unique_ratio)
+    checked = len(rows)
+
     if flat / checked > 0.8:
-        return (f"{flat}/{checked} 个采样日上，截面取值几乎完全相同"
-                f"（唯一值占比 < {min_unique_ratio:.0%}）")
+        d = usable.iloc[len(usable) // 2].dropna()
+        return (f"{flat}/{checked} 个有效采样日上截面取值几乎相同"
+                f"（样例日仅 {d.nunique()} 种取值 / {len(d)} 个标的）。"
+                f"常见成因：因子只输出少数离散值（如 0/1 标记），"
+                f"rank 后大量并列，无法区分标的。")
     return None
 
 
@@ -449,6 +503,24 @@ _UNAVAILABLE_TOKENS = {
     "interest_rate", "yield_curve", "treasury", "fed", "cpi", "gdp", "macro",
     "order_book", "bid_ask", "tick", "intraday", "minute",
     "market_cap", "shares_outstanding", "float",
+}
+
+
+# 每个 token 对应的缺失类别，用于给出可操作的说明
+_TOKEN_REASON = {
+    **{t: "市场不符：这是美股标的/指数，本数据集是中国A股 ETF"
+       for t in ("spy", "qqq", "dia", "iwm", "tlt", "gld", "vxx", "ndx", "spx",
+                 "vix", "vvix", "move", "skew")},
+    **{t: "粒度不符：需要日内/逐笔数据，本数据集只有日频收盘 OHLCV"
+       for t in ("order_book", "bid_ask", "tick", "intraday", "minute")},
+    **{t: "资产类型不符：ETF 是一篮子，本数据集不含成分股与基本面"
+       for t in ("earnings", "eps", "book_value", "pe_ratio", "pb_ratio",
+                 "roe", "roa", "fundamental", "analyst", "estimate",
+                 "revision", "market_cap", "shares_outstanding", "float")},
+    **{t: "未采集：本数据集只有行情，没有文本/宏观序列"
+       for t in ("news", "sentiment", "headline", "tweet", "social",
+                 "interest_rate", "yield_curve", "treasury", "fed",
+                 "cpi", "gdp", "macro")},
 }
 
 
@@ -478,7 +550,14 @@ def _check_data_available(spec, available_cols: set) -> Optional[str]:
     hits = {t for t in _UNAVAILABLE_TOKENS
             if re.search(rf"(?<![a-z0-9_]){re.escape(t)}(?![a-z0-9_])", blob)}
     if hits:
-        return f"引用了不可得的数据源: {', '.join(sorted(hits))}"
+        # 按类别说明缺什么，而不是只抛一个词 —— 用户需要知道
+        # 是市场不对、粒度不对、还是资产类型不对
+        groups = {}
+        for t in sorted(hits):
+            groups.setdefault(_TOKEN_REASON.get(t, "未采集的数据"), []).append(t)
+        parts = [f"{why}（{', '.join(ts)}）" for why, ts in groups.items()]
+        return ("需要本数据集没有的数据：" + "；".join(parts)
+                + "。本数据集 = 中国A股市场 ETF 的日频 OHLCV")
     return None
 
 

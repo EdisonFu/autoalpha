@@ -191,6 +191,7 @@ const STEPS=[['search','论文检索'],['data','数据切分'],['extract','因�
              ['implement','代码实现'],['evaluate','双层回测'],['done','完成']];
 const EXAMPLES=['基于动量的ETF轮动因子','波动率择时信号','量价背离反转因子','跨资产动量溢出'];
 let SID=null, ES=null, papers=[], specs=[], selP=new Set(), selS=new Set(), evals=[];
+let paperMore=false, paperPage=1, paperTotal=0;
 let stageState={};
 
 const $=id=>document.getElementById(id);
@@ -266,8 +267,23 @@ function handle(ev){
     if(payload.next==='run')showSpecs();
   }
   else if(kind==='data'){
-    if(payload.papers){papers=payload.papers;log('  '+payload.papers.length+' 篇论文')}
-    if(payload.specs&&stage==='extract'){specs=payload.specs}
+    if(payload.papers){
+      if(payload.page&&payload.page>1){
+        const seen=new Set(papers.map(p=>p.idx));
+        const fresh=payload.papers.filter(p=>!seen.has(p.idx));
+        if(fresh.length)papers=papers.concat(fresh);
+        else log('  没有更多论文了');
+      } else if(payload.papers.length)papers=payload.papers;
+      paperMore=!!payload.has_more; paperPage=payload.page||1; paperTotal=payload.total||papers.length;
+      log('  '+payload.papers.length+' 篇论文'+(paperTotal>papers.length?` (已加载 ${papers.length}/${paperTotal})`:''));
+      if($('pPapers'))showPapers();
+    }
+    if(payload.specs&&stage==='extract'){
+      if(payload.append){
+        const seen=new Set(specs.map(s=>s.idx));
+        specs=specs.concat(payload.specs.filter(s=>!seen.has(s.idx)));
+      } else specs=payload.specs;
+    }
     if(payload.specs&&stage==='extend'){log('  延伸：'+payload.specs.map(s=>s.factor_name).join(', '))}
     if(payload.n_symbols!==undefined)showData(payload);
     if(payload.evaluation){evals.push(payload.evaluation);showEvals()}
@@ -309,10 +325,12 @@ function showPapers(){
       <div class="actions"><button onclick="submitSel()">继续</button></div>`);
     return;
   }
-  panel('pPapers',`<h3>选择论文 <span class="badge">${papers.length} 篇</span></h3>
+  const badge=paperTotal>papers.length?`${papers.length}/${paperTotal} 篇`:`${papers.length} 篇`;
+  panel('pPapers',`<h3>选择论文 <span class="badge">${badge}</span></h3>
     <div id="pList"></div>
     <div class="actions">
       <button onclick="submitSel()">提取因子假设</button>
+      ${paperMore?`<button class="ghost" onclick="morePapers()">加载下一批</button>`:''}
       <button class="ghost" onclick="selP.clear();submitSel()">跳过，用原始想法</button>
     </div>`);
   drawPapers();
@@ -329,10 +347,17 @@ function drawPapers(){
 }
 function togP(i){selP.has(i)?selP.delete(i):selP.add(i);drawPapers()}
 
-async function submitSel(){
-  log('提交选择：'+(selP.size?[...selP].map(i=>i+1).join(','):'无（用原始想法）'));
+async function morePapers(){
+  log('加载第 '+(paperPage+1)+' 批论文');
+  await fetch('/api/more_papers',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({session_id:SID,page:paperPage+1})});
+}
+
+async function submitSel(append){
+  log('提交选择：'+(selP.size?[...selP].map(i=>i+1).join(','):'无（用原始想法）')
+      +(append?'（追加）':''));
   await fetch('/api/select',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({session_id:SID,paper_indices:[...selP]})});
+    body:JSON.stringify({session_id:SID,paper_indices:[...selP],append:!!append})});
 }
 
 function showSpecs(){
@@ -341,6 +366,7 @@ function showSpecs(){
   panel('pSpecs',`<h3>因子假设 <span class="badge">${specs.length} 个</span></h3>
     <div id="sList"></div>
     <div class="actions"><button onclick="submitRun()">实现并回测</button>
+    <button class="ghost" onclick="backToPapers()">再选论文，追加假设</button>
     <button class="ghost" onclick="selS.clear();drawSpecs()">全不选</button></div>`);
   drawSpecs();
 }
@@ -365,6 +391,14 @@ async function submitRun(){
   log('开始实现 '+selS.size+' 个因子');
   await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({session_id:SID,spec_indices:[...selS]})});
+}
+
+function backToPapers(){
+  selP.clear(); showPapers();
+  const el=$('pPapers');
+  if(el)el.innerHTML=el.innerHTML.replace('>提取因子假设<','>追加这些论文的假设<')
+    .replace('submitSel()','submitSel(true)');
+  log('选择更多论文以追加因子假设');
 }
 
 function showExtend(){

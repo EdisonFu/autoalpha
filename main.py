@@ -200,12 +200,13 @@ def _serve_web(argv):
     import os
     from autoalpha.server import serve
     key = any(os.environ.get(k) for k in
-              ("ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"))
+              ("LLM_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY",
+               "OPENAI_API_KEY"))
     klines = os.environ.get("AUTOALPHA_KLINES")
     print("\n" + "=" * 54, flush=True)
     print(f"  AutoAlpha Web  →  http://{host}:{port}", flush=True)
     print("=" * 54, flush=True)
-    print(f"  LLM API Key : {'已配置' if key else '未配置 ⚠ 请设置 ANTHROPIC_API_KEY'}",
+    print(f"  LLM API Key : {'已配置' if key else '未配置 ⚠ 请设置 LLM_API_KEY'}",
           flush=True)
     print(f"  数据目录     : {klines or '(默认) factor-signal/data/klines'}", flush=True)
     print("  停止服务     : Ctrl+C\n", flush=True)

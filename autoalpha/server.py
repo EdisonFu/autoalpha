@@ -49,6 +49,13 @@ class StartReq(BaseModel):
 class SelectReq(BaseModel):
     session_id: str
     paper_indices: List[int] = []
+    append: bool = False          # True = 把新因子追加到现有列表
+
+
+class MoreReq(BaseModel):
+    session_id: str
+    page: int = 2
+    page_size: int = 10
 
 
 class RunReq(BaseModel):
@@ -69,7 +76,10 @@ def _pump(sid: str, gen_factory):
 
 
 def _spawn(sid: str, gen_factory):
-    _queues[sid] = queue.Queue()
+    # 复用同一个 Queue 对象：SSE 流在首次连接时已持有它的引用，
+    # 若这里换新对象，后续阶段的事件会写进没人读的队列
+    # （实测：加载第 2 批论文后 SSE 收不到任何事件）。
+    _queues.setdefault(sid, queue.Queue())
     t = threading.Thread(target=_pump, args=(sid, gen_factory), daemon=True)
     t.start()
 
@@ -107,16 +117,33 @@ def select(req: SelectReq):
     if not sess:
         raise HTTPException(404, "session not found")
     orch = get_orch()
-    picked = [sess.papers[i] for i in req.paper_indices
-              if 0 <= i < len(sess.papers)]
+    picked = orch.papers_by_index(sess, req.paper_indices)
 
     def _gen():
-        yield from orch.extract_specs(sess, picked)
+        yield from orch.extract_specs(sess, picked, append=req.append)
         yield FlowEvent(EventKind.AWAIT_INPUT, Stage.IMPLEMENT,
                         "请选择要实现的因子假设", {"next": "run"})
 
     _spawn(req.session_id, _gen)
     return {"ok": True, "n_selected": len(picked)}
+
+
+@app.post("/api/more_papers")
+def more_papers(req: MoreReq):
+    """加载下一批论文。结果有缓存，翻页不重复调用 arXiv 与打分。"""
+    sess = _sessions.get(req.session_id)
+    if not sess:
+        raise HTTPException(404, "session not found")
+    orch = get_orch()
+
+    def _gen():
+        yield from orch.search_papers(sess, sess.idea,
+                                      max_results=req.page_size, page=req.page)
+        yield FlowEvent(EventKind.AWAIT_INPUT, Stage.SELECT,
+                        f"第 {req.page} 批论文已加载", {"next": "select"})
+
+    _spawn(req.session_id, _gen)
+    return {"ok": True, "page": req.page}
 
 
 @app.post("/api/run")
@@ -160,7 +187,7 @@ async def events(session_id: str):
     async def stream():
         loop = asyncio.get_event_loop()
         while True:
-            q = _queues.get(session_id)
+            q = _queues.get(session_id)      # 每轮重取，不缓存引用
             if q is None:
                 await asyncio.sleep(0.2)
                 continue
@@ -215,9 +242,9 @@ def library():
 def health():
     import os as _os
     return {"ok": True,
-            "has_api_key": bool(_os.environ.get("ANTHROPIC_API_KEY")
-                                or _os.environ.get("DEEPSEEK_API_KEY")
-                                or _os.environ.get("OPENAI_API_KEY"))}
+            "has_api_key": any(_os.environ.get(k) for k in
+                               ("LLM_API_KEY", "ANTHROPIC_API_KEY",
+                                "DEEPSEEK_API_KEY", "OPENAI_API_KEY"))}
 
 
 @app.get("/")

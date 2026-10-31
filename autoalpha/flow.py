@@ -80,6 +80,8 @@ class FlowSession:
     idea: str = ""
     stage: Stage = Stage.INIT
     papers: List[Dict] = field(default_factory=list)
+    paper_page: int = 1
+    paper_total: int = 0
     selected_papers: List[Dict] = field(default_factory=list)
     specs: List[Any] = field(default_factory=list)
     spec_zh: List[Dict] = field(default_factory=list)

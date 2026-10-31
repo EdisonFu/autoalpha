@@ -293,8 +293,16 @@ def test_data_context_forbids_proxies():
     txt = describe_for_prompt(
         {"n_kept": 92, "dist_kept": {"equity": 92}, "sample": ["510300 沪深300ETF"]},
         ["close", "volume"], ("2022-01-04", "2026-02-27"))
-    assert "China" in txt and "NOT US" in txt
-    assert "VIX" in txt and "SPY" in txt
+    # 必须说清三件事：什么市场、什么级别、什么资产类型
+    assert "China A-share" in txt, "须点明市场"
+    assert "daily bars" in txt.lower() or "daily" in txt, "须点明数据频率"
+    assert "ETF" in txt, "须点明资产类型"
+    # 按类别列出缺失，而不只是甩一串词
+    assert "Wrong market" in txt and "SPY" in txt
+    assert "Wrong granularity" in txt and "intraday" in txt
+    assert "Wrong asset type" in txt and "fundamentals" in txt
+    # ETF 专属陷阱（实测 limit_up_volume_strength 栽在这里）
+    assert "price limit" in txt, "须提示 ETF 无涨跌停"
     assert "DO NOT invent a proxy" in txt
 
 

@@ -5,7 +5,14 @@
 ## 启动
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...        # 或 DEEPSEEK_API_KEY / OPENAI_API_KEY
+export LLM_API_KEY=...                     # 你的 LLM 密钥
+export LLM_MODEL=<model-id>                # 模型 ID
+# 若用 OpenAI 兼容端点，再加：
+# export LLM_BASE_URL=https://.../v1
+# 可选：按百万 token 计价，用于成本统计
+# export LLM_PRICE_INPUT=3.0
+# export LLM_PRICE_OUTPUT=15.0
+
 .venv/bin/python main.py --web             # 默认 http://127.0.0.1:8000
 .venv/bin/python main.py --web --port 8765 # 指定端口
 ```
