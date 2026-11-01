@@ -239,3 +239,94 @@ def test_progress_bar_advances(page):
     w = page.evaluate(
         "() => document.querySelector('.progress .bar').style.width")
     assert w and w != "0%", f"进度条未推进: {w}"
+
+
+# ── 单屏布局 ────────────────────────────────────────────────────────────
+
+def test_only_current_step_panel_is_visible(page):
+    """
+    页面高度不应随步骤累积。实测优化前 3 个因子就涨到 5.6 屏。
+    每次只显示当前步骤的面板，完成的收进步骤卡。
+    """
+    page.evaluate("""() => {
+        handle({kind:'await_input',stage:'intent',message:'',payload:{next:'search'}});
+        INTENT={canonical_en:'x',aliases:[],market:'china_a',market_label:'A股',
+                asset_class:'etf',factor_family:'momentum',horizon:'daily',
+                doc_preference:'both',restated_zh:'测试',confidence:0.8};
+        showIntent(true);
+        handle({kind:'data',stage:'search',message:'',payload:{page:1,total:2,
+            has_more:false,papers:[{idx:0,title:'P1'},{idx:1,title:'P2'}]}});
+        handle({kind:'await_input',stage:'select',message:'',payload:{next:'select'}});
+    }""")
+    page.wait_for_timeout(300)
+
+    visible = page.evaluate(
+        """() => [...document.querySelectorAll('#panels > .card')]
+                 .filter(c => c.style.display !== 'none').map(c => c.id)""")
+    assert len(visible) == 1, f"同时只应显示一个步骤面板，实际 {visible}"
+    assert visible[0] == "pPapers"
+
+
+def test_completed_steps_are_clickable_with_summary(page):
+    """折叠后要带摘要——只写「已完成」等于逼用户点开才知道发生了什么。"""
+    page.evaluate("""() => {
+        INTENT={canonical_en:'x',aliases:[],market:'china_a',market_label:'A股',
+                asset_class:'etf',factor_family:'momentum',horizon:'daily',
+                doc_preference:'both',restated_zh:'测试',confidence:0.8};
+        handle({kind:'data',stage:'intent',message:'',payload:{intent:INTENT}});
+        handle({kind:'await_input',stage:'intent',message:'',payload:{next:'search'}});
+        handle({kind:'data',stage:'search',message:'',payload:{page:1,total:1,
+            has_more:false,papers:[{idx:0,title:'P1'}]}});
+        handle({kind:'await_input',stage:'select',message:'',payload:{next:'select'}});
+    }""")
+    page.wait_for_timeout(300)
+
+    sums = page.evaluate(
+        "() => [...document.querySelectorAll('.step .sum')].map(e => e.textContent)")
+    assert any("A股" in s for s in sums), f"意图步骤应有摘要: {sums}"
+    assert page.evaluate("document.querySelectorAll('.step.clickable').length") >= 2
+
+    page.evaluate("openStep('intent')")
+    page.wait_for_timeout(300)
+    visible = page.evaluate(
+        """() => [...document.querySelectorAll('#panels > .card')]
+                 .filter(c => c.style.display !== 'none').map(c => c.id)""")
+    assert visible == ["pIntent"], f"点步骤应切回该面板，实际 {visible}"
+
+
+def test_feeds_entry_sits_next_to_the_input(page):
+    """灵感池不属于任何步骤，它的用途是「还没想好研究什么」，所以放在输入框旁。"""
+    btn = page.query_selector(".heroHead .inspire")
+    assert btn, "入口应在输入框标题行"
+    assert "还没想好" in btn.inner_text()
+    assert page.evaluate(
+        "document.querySelector('#cardFeeds').classList.contains('hidden')"), \
+        "默认应收起，不占开场版面"
+
+
+def test_chart_has_axes_in_percent(page):
+    """净值曲线要有 X/Y 轴，Y 轴是收益率。"""
+    page.evaluate("""() => {
+        handle({kind:'data',stage:'evaluate',message:'',payload:{evaluation:{
+          factor_name:'f',status:'PASS',fail_reason:'',description:'',zh_what:'',
+          is_ic:{ic_mean_1d:0.03,icir_daily:0.1,icir_annual:1.6,ic_tstat:3.1,
+                 n_obs:700,monthly_win_rate:0.6,n_months:36,ic_by_lag:{},
+                 ic_halflife:20,coverage:1},
+          is_layers:{n_quantiles:5,layer_ann_returns:[-0.06,0.02,-0.01,0.05,0.12],
+            monotonicity:0.9,long_short:{ann_return:0.2,ann_return_net:0.18,
+            sharpe:0.8,sharpe_net:0.7,max_drawdown:-0.1,calmar:1.8,
+            turnover_daily:0.11},long_only:null},
+          oos_ic:null,oos_layers:null,sharpe_decay:null,max_nav_corr:0,
+          nav:[{d:'2024-01-01',v:1},{d:'2024-03-01',v:1.1},{d:'2024-06-01',v:1.25}]}}});
+    }""")
+    page.wait_for_timeout(300)
+    svg = page.evaluate(
+        "() => {const s=document.querySelector('.bChart'); return s?s.outerHTML:''}")
+    assert svg, "应渲染图表"
+    assert svg.count("%<") >= 3, "Y 轴应有百分比刻度（收益率）"
+    assert "2024-" in svg, "X 轴应有日期"
+    # viewBox 宽高比须接近容器，否则等比缩放会留大片空白
+    import re as _re
+    m = _re.search(r'viewBox="0 0 (\d+) (\d+)"', svg)
+    assert m and int(m.group(1)) / int(m.group(2)) > 5, \
+        "viewBox 过窄会导致左右留白"

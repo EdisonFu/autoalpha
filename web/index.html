@@ -64,6 +64,25 @@ button.ghost:hover:not(:disabled){border-color:var(--acc);color:var(--fg);box-sh
   transition:.25s;vertical-align:middle}
 .step.active .sq{background:var(--acc);color:#fff}
 .step.done .sq{background:var(--ok);color:#fff}
+.step.clickable{cursor:pointer}
+.step.clickable:hover{border-color:var(--acc);background:rgba(79,140,255,.08)}
+.step.viewing{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc) inset}
+.step .sum{font-size:10.5px;color:var(--fg2);margin-top:4px;font-family:var(--mono);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.step.viewing .sum{color:var(--acc)}
+.card.hidden{display:none}
+.heroHead{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.heroHead h2{margin:0;flex:none}
+.inspire{margin-left:auto;font-size:12px;padding:8px 14px;white-space:nowrap}
+.inspire:hover:not(:disabled){border-color:var(--warn);color:var(--fg)}
+.feeditem{cursor:pointer}
+.feeditem .use{opacity:0;transition:.15s;color:var(--acc);
+  border-color:rgba(79,140,255,.4)}
+.feeditem:hover .use{opacity:1}
+.feeditem:hover{border-color:var(--acc)}
+.logs.collapsed{display:none}
+.card h3 span[id=logCaret]{transition:transform .2s}
+.card h3.open span[id=logCaret]{transform:rotate(180deg);display:inline-block}
 .mini{width:6px;height:6px;border-radius:50%;background:currentColor;
   animation:blink 1s ease-in-out infinite}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
@@ -250,7 +269,8 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   border-top-color:var(--acc);border-radius:50%;animation:sp .7s linear infinite;
   vertical-align:-2px;margin-right:7px}
 @keyframes sp{to{transform:rotate(360deg)}}
-.bChart{width:100%;height:116px;display:block}
+.bChart{width:100%;height:150px;display:block;margin:0 0 8px}
+.chartcap{font-size:10.5px;color:var(--fg2);letter-spacing:.3px;margin:4px 0 2px}
 .actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:13px}
 .note{font-size:11.5px;color:var(--fg2);line-height:1.65;margin-top:9px;
   padding:9px 11px;background:rgba(79,140,255,.07);border-radius:7px;border-left:2px solid var(--acc)}
@@ -268,12 +288,15 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
       <span id="cfgDot" class="dot"></span>LLM 配置
     </button>
   </header>
-  <div class="sub">研究方向 → 论文检索 → 因子假设 → 实现 → IS/OOS 双层回测 → 因子库</div>
 
   <div class="hero">
-    <h2>输入研究方向</h2>
+    <div class="heroHead">
+      <h2>输入研究方向</h2>
+      <button class="ghost inspire" onclick="toggleFeeds()">
+        💡 还没想好？看看大家最近在研究什么</button>
+    </div>
     <div class="inputRow">
-      <input id="idea" type="text" placeholder="例如：基于动量的ETF轮动因子" autocomplete="off">
+      <input id="idea" type="text" placeholder="例如：A股ETF截面动量轮动" autocomplete="off">
       <button id="btnStep" onclick="start('stepwise')">分步运行</button>
       <button id="btnAuto" class="ghost" onclick="start('auto')">全自动</button>
     </div>
@@ -334,32 +357,36 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   </div>
 </div>
 
+<div class="card hidden" id="cardFeeds">
+  <h3>最近大家在研究什么 <span class="badge" id="feedBadge">未加载</span></h3>
+  <div class="note">
+    还没想好研究方向？这里是量化圈最近发布的文章与工作论文。
+    看到感兴趣的，把它写进上面的输入框就能开跑。
+  </div>
+  <div class="actions" style="margin-top:10px">
+    <button class="ghost" onclick="refreshFeeds()">抓取最新</button>
+    <button class="ghost" onclick="suggestFeeds()">只看与当前方向相关的</button>
+    <button class="ghost" onclick="toggleFeeds()">收起</button>
+  </div>
+  <div id="feedList"></div>
+</div>
+
 <div class="steps" id="steps"></div>
   <div id="panels"></div>
 
-  <div class="card">
-    <h3>灵感池 <span class="badge" id="feedBadge">未加载</span></h3>
-    <div style="font-size:11.5px;color:var(--fg2);line-height:1.65;margin-bottom:9px">
-      量化博客与机构最新文章（AlphaArchitect / Quantpedia / QuantInsti / NBER）。
-      RSS 不支持按词检索，所以先抓取入库，再本地筛选。
-    </div>
-    <div class="actions" style="margin-top:0">
-      <button class="ghost" onclick="refreshFeeds()">抓取最新</button>
-      <button class="ghost" onclick="loadFeeds()">查看</button>
-      <button class="ghost" onclick="suggestFeeds()">按当前意图筛选</button>
-    </div>
-    <div id="feedList"></div>
-  </div>
-
-  <div class="card">
+  <!-- 用量与日志初始隐藏：开场只该看到输入框。-->
+  <div class="card hidden" id="cardUsage">
     <h3>Token 用量</h3>
-    <div id="usageBox"><div class="empty" style="padding:14px;font-size:12px">尚未调用</div></div>
+    <div id="usageBox"></div>
   </div>
 
-  <div class="card">
-    <h3>运行日志</h3>
-    <div class="logs" id="logs"><div class="empty">等待开始…</div></div>
+  <div class="card hidden" id="cardLogs">
+    <h3 style="cursor:pointer" onclick="toggleLogs()">
+      运行日志 <span class="badge" id="logCount">0</span>
+      <span id="logCaret" style="margin-left:auto;color:var(--fg2)">⌄</span></h3>
+    <div class="logs" id="logs"></div>
   </div>
+
 </div>
 
 <script>
@@ -372,6 +399,20 @@ const EXAMPLES=['A股ETF截面动量轮动','A股小市值因子有效性',
                 '港股通标的量价背离反转','A股波动率择时信号'];
 let SID=null, ES=null, papers=[], specs=[], selP=new Set(), selS=new Set(), evals=[];
 let paperMore=false, paperPage=1, paperTotal=0, INTENT=null;
+
+// ── 单屏布局 ────────────────────────────────────────────────────────────
+// 只展示当前步骤的面板；完成的步骤收进步骤卡，点击可再打开。
+// 页面高度因此不随步骤累积 —— 实测原来 3 个因子就涨到 5.6 屏。
+//
+// 声明必须在 renderSteps() 首次调用之前：let 有暂时性死区，
+// 放在文件后面会抛 "Cannot access 'OPEN_STEP' before initialization"，
+// 表现为面板一个都不显示。
+const PANEL_STEP = {            // 面板 → 所属步骤
+  pIntent:'intent', pPapers:'search', pData:'data',
+  // pErr 不列入：错误提示不该被单屏逻辑隐藏
+  pSpecs:'extract', pEval:'evaluate', pExt:'extend',
+};
+let OPEN_STEP = null;           // 当前展开的步骤（null = 跟随最新）
 
 // ── 阶段状态机 ──────────────────────────────────────────────────────────
 // 每个阶段三态：idle(未开始) / busy(进行中) / done(已完成)。
@@ -419,6 +460,25 @@ loadCfg(); loadData(); checkDemo();
 $('chips').innerHTML=EXAMPLES.map(e=>`<div class="chip" onclick="$('idea').value='${e}'">${e}</div>`).join('');
 $('idea').addEventListener('keydown',e=>{if(e.key==='Enter')start('stepwise')});
 
+/** 每个步骤的一行摘要。折叠后用户不展开也知道发生了什么 —— 
+ *  只写「✓ 已完成」等于逼人点开。 */
+function stepSummary(k){
+  if(k==='intent'&&INTENT)
+    return [INTENT.market_label||INTENT.market, INTENT.factor_family,
+            INTENT.horizon].filter(x=>x&&x!=='unknown').join(' · ');
+  if(k==='search'&&papers.length)
+    return selP.size?`已选 ${selP.size}/${papers.length} 篇`:`${papers.length} 篇`;
+  if(k==='data'&&window.__data)
+    return `${window.__data.n_symbols} 标的 · IS ${window.__data.is_days}d`;
+  if(k==='extract'&&specs.length)return `${specs.length} 个假设`;
+  if(k==='evaluate'&&evals.length){
+    const p=evals.filter(e=>e.status==='PASS').length;
+    const s=evals.filter(e=>e.status==='SKIP_NO_DATA').length;
+    return `${p}/${evals.length-s} 通过`;
+  }
+  return '';
+}
+
 function renderSteps(){
   const done=STEPS.filter(([k])=>stageState[k]==='done').length;
   const pct=Math.round(done/STEPS.length*100);
@@ -427,20 +487,83 @@ function renderSteps(){
     + STEPS.map(([k,t],i)=>{
     const st=stageState[k]||'';
     const icon=st==='done'?'✓':(st==='active'?'<span class="mini"></span>':i+1);
-    return `<div class="step ${st}">
+    const has=!!document.querySelector(`#panels > .card[data-step="${k}"]`);
+    const cur=OPEN_STEP===k;
+    const sum=stepSummary(k);
+    return `<div class="step ${st}${has?' clickable':''}${cur?' viewing':''}"
+      ${has?`onclick="openStep('${k}')" title="点击查看这一步"`:''}>
       <div class="n"><span class="sq">${icon}</span>Step ${i+1}</div>
-      <div class="t">${t}</div></div>`;
+      <div class="t">${t}</div>
+      ${sum?`<div class="sum">${esc(sum)}</div>`:''}</div>`;
   }).join('');
 }
 renderSteps();
 
+let LOG_N=0;
 function log(msg,cls=''){
   const box=$('logs');
-  if(box.querySelector('.empty'))box.innerHTML='';
+  $('cardLogs').classList.remove('hidden');     // 开跑后才出现
   const tm=new Date().toLocaleTimeString('zh-CN',{hour12:false});
   box.insertAdjacentHTML('beforeend',
     `<div class="log ${cls}"><span class="tm">${tm}</span><span>${esc(msg)}</span></div>`);
   box.scrollTop=box.scrollHeight;
+  LOG_N++;
+  const c=$('logCount'); if(c)c.textContent=LOG_N;
+}
+
+function toggleLogs(){
+  const box=$('logs'), h=$('cardLogs').querySelector('h3');
+  box.classList.toggle('collapsed');
+  h.classList.toggle('open');
+}
+
+/** 用某条灵感作为研究方向 */
+function useFeed(i){
+  const it=(window.__feedItems||[])[i]; if(!it)return;
+  $('idea').value=it.title;
+  $('idea').focus();
+  toggleFeeds();                       // 收起，让视线回到输入框
+  log('已填入研究方向："'+it.title.slice(0,50)+'"');
+  $('idea').scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+function toggleFeeds(){
+  const c=$('cardFeeds');
+  const hid=c.classList.contains('hidden');
+  c.classList.toggle('hidden');
+  if(hid&&!$('feedList').innerHTML)loadFeeds();
+  if(hid)c.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+/** 统一请求：非 2xx 或非 JSON 都转成可读的 Error，而不是 JSON 解析错误 */
+async function api(path,body){
+  let r;
+  try{
+    r=await fetch(path,body!==undefined
+      ? {method:'POST',headers:{'Content-Type':'application/json'},
+         body:JSON.stringify(body)}
+      : {});
+  }catch(e){ throw new Error('无法连接服务：'+e.message) }
+
+  const txt=await r.text();
+  let j=null;
+  try{ j=txt?JSON.parse(txt):null }catch(e){
+    // 服务端返回了非 JSON（例如代理层的 HTML 错误页）
+    throw new Error(r.ok ? '服务返回了非 JSON 内容'
+      : `服务错误 ${r.status}：${txt.slice(0,120)}`);
+  }
+  if(!r.ok)throw new Error(j&&j.detail ? j.detail : `请求失败 ${r.status}`);
+  return j;
+}
+
+/** 配置缺失类错误给出一个直接可点的入口 */
+function showStartError(msg){
+  log('✗ '+msg,'err');
+  const needCfg=/LLM|API Key|模型|密钥/i.test(msg);
+  panel('pErr',`<h3 style="color:var(--bad)">无法启动</h3>
+    <div class="note" style="border-left-color:var(--bad)">${esc(msg)}</div>
+    ${needCfg?`<div class="actions">
+      <button onclick="openCfg()">打开 LLM 配置</button></div>`:''}`);
 }
 
 async function start(mode){
@@ -450,16 +573,19 @@ async function start(mode){
   papers=[];specs=[];evals=[];selP.clear();selS.clear();stageState={};
   PH={intent:'idle',search:'idle',extract:'idle',implement:'idle'};BUSY=true;
   paperMore=false;paperPage=1;paperTotal=0;INTENT=null;
+  OPEN_STEP=null;LOG_N=0;window.__data=null;selE.clear();
+  $('cardUsage').classList.add('hidden');
   $('panels').innerHTML='';$('logs').innerHTML='';renderSteps();
   log('启动：'+idea);
   try{
-    const r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({idea,mode})});
-    const j=await r.json();
+    const j=await api('/api/start',{idea,mode});
     SID=j.session_id;
     log('会话 '+SID+'（'+(mode==='auto'?'全自动':'分步')+'）');
     connect();
-  }catch(e){log('启动失败：'+e,'err');$('btnStep').disabled=$('btnAuto').disabled=false}
+  }catch(e){
+    showStartError(e.message);
+    BUSY=false;Object.keys(PH).forEach(k=>PH[k]='idle');syncButtons();
+  }
 }
 
 function connect(){
@@ -521,7 +647,7 @@ function handle(ev){
         else log('  没有更多论文了');
       } else if(payload.papers.length)papers=payload.papers;
       paperMore=!!payload.has_more; paperPage=payload.page||1; paperTotal=payload.total||papers.length;
-      log('  '+payload.papers.length+' 篇论文'+(paperTotal>papers.length?` (已加载 ${papers.length}/${paperTotal})`:''));
+      log('  '+payload.papers.length+' 篇资料'+(paperTotal>papers.length?` (已加载 ${papers.length}/${paperTotal})`:''));
       if($('pPapers'))showPapers();
     }
     if(payload.specs&&stage==='extract'){
@@ -530,7 +656,10 @@ function handle(ev){
         specs=specs.concat(payload.specs.filter(s=>!seen.has(s.idx)));
       } else specs=payload.specs;
     }
-    if(payload.specs&&stage==='extend'){log('  延伸：'+payload.specs.map(s=>s.factor_name).join(', '))}
+    if(payload.specs&&stage==='extend'){
+      log('  延伸变体：'+payload.specs.map(s=>s.factor_name).join('、'));
+      showExtVariants(payload.specs);
+    }
     if(payload.n_symbols!==undefined)showData(payload);
     if(payload.evaluation){evals.push(payload.evaluation);showEvals()}
   }
@@ -538,13 +667,39 @@ function handle(ev){
 
 function panel(id,html){
   let el=$(id);
-  if(!el){$('panels').insertAdjacentHTML('beforeend',`<div class="card" id="${id}"></div>`);el=$(id)}
+  if(!el){
+    $('panels').insertAdjacentHTML('beforeend',
+      `<div class="card" id="${id}" data-step="${PANEL_STEP[id]||''}"></div>`);
+    el=$(id);
+  }
   el.innerHTML=html;
-  syncButtons();          // 新插入的按钮要立刻套用当前阶段规则
+  const st=PANEL_STEP[id];
+  if(st)OPEN_STEP=st;           // 新内容到达，视图跟到该步骤
+  applyPanelView();
+  syncButtons();
   return el;
 }
 
+/** 只显示 OPEN_STEP 对应的面板，其余隐藏 */
+function applyPanelView(){
+  document.querySelectorAll('#panels > .card').forEach(c=>{
+    const st=c.dataset.step;
+    c.style.display = (!st || st===OPEN_STEP) ? '' : 'none';
+  });
+  renderSteps();
+}
+
+/** 点步骤卡：展开该步骤的面板 */
+function openStep(st){
+  if(!document.querySelector(`#panels > .card[data-step="${st}"]`))return;
+  OPEN_STEP=st;
+  applyPanelView();
+  const el=document.querySelector(`#panels > .card[data-step="${st}"]`);
+  if(el)el.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
 function showData(p){
+  window.__data=p;
   const ex=(p.excluded||[]).length
     ? `<div class="note">截面池 <code>${esc(p.preset||'equity')}</code>：
        从 ${p.n_total} 只中保留 <b>${p.n_symbols}</b> 只，
@@ -622,10 +777,10 @@ function showPapers(){
     return;
   }
   const badge=paperTotal>papers.length?`${papers.length}/${paperTotal} 篇`:`${papers.length} 篇`;
-  panel('pPapers',`<h3>选择论文 <span class="badge">${badge}</span></h3>
+  panel('pPapers',`<h3>选择参考资料 <span class="badge">${badge}</span></h3>
     <div id="pList"></div>
     <div class="actions">
-      <button data-act="select" onclick="submitSel()">提取因子假设</button>
+      <button data-act="select" onclick="submitSel()">从选中资料提取因子假设</button>
       ${paperMore?`<button data-act="more" class="ghost" onclick="morePapers()">加载下一批</button>`:''}
       <button data-act="select" class="ghost" onclick="selP.clear();submitSel()">跳过，用原始想法</button>
     </div>`);
@@ -675,7 +830,7 @@ function showSpecs(){
   panel('pSpecs',`<h3>因子假设 <span class="badge">${specs.length} 个</span></h3>
     <div id="sList"></div>
     <div class="actions"><button data-act="run" onclick="submitRun()">实现并回测</button>
-    <button data-act="more" class="ghost" onclick="backToPapers()">再选论文，追加假设</button>
+    <button data-act="more" class="ghost" onclick="backToPapers()">再选资料，追加假设</button>
     <button class="ghost" onclick="selS.clear();drawSpecs()">全不选</button></div>`);
   drawSpecs();
 }
@@ -705,20 +860,84 @@ async function submitRun(){
 function backToPapers(){
   selP.clear(); showPapers();
   const el=$('pPapers');
-  if(el)el.innerHTML=el.innerHTML.replace('>提取因子假设<','>追加这些论文的假设<')
+  if(el)el.innerHTML=el.innerHTML.replace('>从选中资料提取因子假设<','>追加这些资料的假设<')
     .replace('submitSel()','submitSel(true)');
-  log('选择更多论文以追加因子假设');
+  log('选择更多参考资料以追加因子假设');
 }
 
+let selE=new Set();        // 选中要做延伸的因子
+
 function showExtend(){
-  panel('pExt',`<h3>因子延伸</h3>
-    <div class="note">已有因子通过双层门控，可基于它们生成结构化延伸变体。</div>
-    <div class="actions"><button data-act="extend" onclick="doExtend()">生成延伸假设</button></div>`);
+  const pass=evals.filter(e=>e.status==='PASS');
+  if(!pass.length){
+    panel('pExt',`<h3>延伸探索</h3>
+      <div class="empty" style="padding:18px;font-size:12px">
+        本轮没有因子通过门控，暂无可延伸的基础因子。</div>`);
+    return;
+  }
+  // 默认全选：用户进到这一步通常就是想延伸
+  if(!selE.size)pass.forEach(e=>selE.add(e.factor_name));
+  panel('pExt',`<h3>延伸探索 <span class="badge">${pass.length} 个可延伸</span></h3>
+    <div class="note">选择基础因子，系统会围绕它生成结构化变体
+      （参数变体 / 公式变体 / 与正交因子组合），并逐个过同一套双层门控。
+      变体之间会做多样性过滤，避免只是换个参数名。</div>
+    <div id="eList" style="margin-top:12px"></div>
+    <div class="actions">
+      <button data-act="extend" onclick="doExtend()">开始延伸探索</button>
+      <button class="ghost" onclick="selE.clear();drawExtend()">全不选</button>
+    </div>`);
+  drawExtend();
+}
+
+function drawExtend(){
+  const pass=evals.filter(e=>e.status==='PASS');
+  const el=$('eList'); if(!el)return;
+  el.innerHTML=pass.map(e=>{
+    const ls=e.is_layers&&e.is_layers.long_short;
+    const on=selE.has(e.factor_name);
+    return `<div class="item ${on?'sel':''}" onclick="togE('${e.factor_name}')">
+      <div class="box">${on?'✓':''}</div>
+      <div class="bd">
+        <div class="ti"><code>${esc(e.factor_name)}</code></div>
+        ${e.zh_what?`<div class="ab">${esc(e.zh_what)}</div>`:''}
+        <div class="srcline">
+          <span class="badge2 dt-paper">t ${fmt(e.is_ic&&e.is_ic.ic_tstat,2)}</span>
+          <span class="badge2">单调 ${fmt(e.is_layers&&e.is_layers.monotonicity,2)}</span>
+          ${ls?`<span class="badge2">扣费Sharpe ${fmt(ls.sharpe_net,2)}</span>`:''}
+        </div>
+      </div></div>`;
+  }).join('');
+  const btn=document.querySelector('[data-act=extend]');
+  if(btn)btn.textContent=selE.size?`开始延伸探索（${selE.size} 个基础因子）`:'请先选择因子';
+  syncButtons();
+}
+
+function togE(n){selE.has(n)?selE.delete(n):selE.add(n);drawExtend()}
+
+/** 展示生成了哪些变体及其延伸类型 */
+function showExtVariants(list){
+  const el=$('eList'); if(!el)return;
+  const LBL={param_variation:'参数变体',formula_variation:'公式变体',
+             combination:'正交组合'};
+  el.innerHTML=list.map(x=>`
+    <div class="item" style="cursor:default">
+      <div class="bd">
+        <div class="ti"><code>${esc(x.factor_name)}</code>
+          <span class="badge2 dt-working_paper" style="margin-left:7px">${
+            LBL[x.extension_type]||x.extension_type}</span></div>
+        ${x.zh_what?`<div class="ab">${esc(x.zh_what)}</div>`:''}
+        ${x.rationale?`<div class="zh"><b>为何这样延伸</b>${esc(x.rationale)}</div>`:''}
+        ${x.base?`<div class="srcline"><span class="badge2">基于 ${esc(x.base)}</span></div>`:''}
+      </div></div>`).join('');
+  const btn=document.querySelector('[data-act=extend]');
+  if(btn)btn.textContent='延伸探索已完成';
 }
 async function doExtend(){
-  log('生成延伸假设');
+  if(!selE.size){log('请先选择要延伸的因子','err');return}
+  log('延伸探索：基于 '+[...selE].join('、'));
+  if(window.__demo){ await playExtendDemo(); return; }
   await fetch('/api/extend',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({session_id:SID})});
+    body:JSON.stringify({session_id:SID,factors:[...selE]})});
 }
 
 // ── 数据源配置 ──────────────────────────────────────────────────────────
@@ -917,7 +1136,7 @@ async function playDemo(){
   handle({kind:'data',stage:'search',message:`找到 ${d.papers.length} 篇文献`,
           payload:{page:1,total:12,has_more:true,papers:d.papers}});
   handle({kind:'stage_end',stage:'search',message:'检索完成',payload:{}});
-  handle({kind:'await_input',stage:'select',message:'请选择要研究的论文',
+  handle({kind:'await_input',stage:'select',message:'请选择要研究的参考资料',
           payload:{next:'select'}});
   await step(900);
 
@@ -946,8 +1165,42 @@ async function playDemo(){
   handle({kind:'stage_end',stage:'evaluate',
           message:`完成：${np}/${d.evals.length} 通过双层门控`,
           payload:{usage:d.usage}});
-  handle({kind:'stage_end',stage:'done',message:'本轮完成',payload:{}});
-  log('演示结束。配置 LLM_API_KEY 后可跑真实流水线。','ok');
+  // 带上 can_extend，让延伸探索面板出现 —— 演示必须覆盖这一步，
+  // 否则用户看不到「延伸」在流程里是什么位置、怎么触发。
+  handle({kind:'stage_end',stage:'done',message:'本轮完成',
+          payload:{can_extend:np>0}});
+  log(np>0 ? '有因子通过门控，可在「延伸探索」里选择基础因子继续。'
+           : '本轮无因子通过门控。','ok');
+}
+
+/** 演示：按选中的基础因子重放延伸探索 */
+async function playExtendDemo(){
+  const d=window.__demo; if(!d||!d.extensions)return;
+  const step=(ms)=>new Promise(r=>setTimeout(r,ms));
+  const picked=[...selE];
+  const exts=d.extensions.filter(x=>picked.includes(x.base));
+  const names=exts.map(x=>x.factor_name);
+  const results=(d.ext_evals||[]).filter(e=>names.includes(e.factor_name));
+
+  handle({kind:'stage_start',stage:'extend',message:'生成延伸变体',payload:{}});
+  await step(700);
+  handle({kind:'data',stage:'extend',
+          message:`生成 ${exts.length} 个延伸变体`,
+          payload:{specs:exts.map((x,i)=>({idx:1000+i,...x}))}});
+  await step(600);
+
+  handle({kind:'stage_start',stage:'implement',message:'实现并评估延伸变体',payload:{}});
+  for(const e of results){
+    await step(800);
+    handle({kind:'data',stage:'evaluate',message:e.factor_name,
+            payload:{evaluation:e}});
+  }
+  const np=results.filter(e=>e.status==='PASS').length;
+  handle({kind:'stage_end',stage:'evaluate',
+          message:`延伸完成：${np}/${results.length} 通过门控`,payload:{}});
+  handle({kind:'stage_end',stage:'extend',message:'延伸探索完成',payload:{}});
+  log(`延伸探索：${np}/${results.length} 个变体通过。`
+      +`注意其中有变体反而不如基础因子——延伸不保证改进。`,'ok');
 }
 
 async function refreshFeeds(){
@@ -980,22 +1233,28 @@ function renderFeeds(items,stat){
   if(!items)return;
   const el=$('feedList');
   if(!items.length){el.innerHTML='<div class="empty" style="padding:16px;font-size:12px">暂无条目，先点「抓取最新」</div>';return}
-  el.innerHTML=items.map(it=>`
-    <div class="item" style="cursor:default">
+  // 点一条就把标题填进输入框 —— 这才是灵感池的实际用法：
+  // 看到感兴趣的，直接拿它当研究方向开跑。
+  el.innerHTML=items.map((it,i)=>`
+    <div class="item feeditem" onclick="useFeed(${i})" title="点击用它作为研究方向">
       <div class="bd">
         <div class="ti">${esc(it.title)}</div>
         <div class="srcline">
           <span class="badge2 src">${esc(it.source_label||it.feed||'')}</span>
           ${it.published?`<span class="badge2">${esc(it.published)}</span>`:''}
           ${it.url?`<span class="badge2"><a href="${esc(it.url)}" target="_blank"
-            rel="noopener" style="color:inherit">原文 ↗</a></span>`:''}
+            rel="noopener" onclick="event.stopPropagation()"
+            style="color:inherit">原文 ↗</a></span>`:''}
+          <span class="badge2 use">用它开跑 →</span>
         </div>
         ${it.summary?`<div class="ab">${esc(it.summary)}</div>`:''}
       </div></div>`).join('');
+  window.__feedItems=items;
 }
 
 function showUsage(u){
   if(!u||!u.calls)return;
+  $('cardUsage').classList.remove('hidden');
   const cost=u.priced?`$${u.cost_usd.toFixed(4)}`:'未计价';
   const bp=Object.entries(u.by_purpose||{})
     .sort((a,b)=>(b[1].input+b[1].output)-(a[1].input+a[1].output))
@@ -1012,18 +1271,66 @@ function showUsage(u){
 
 function sparkline(pts){
   if(!pts||pts.length<2)return '';
-  const W=560,H=116,P=4;
-  const vs=pts.map(p=>p.v),mn=Math.min(...vs),mx=Math.max(...vs),sp=(mx-mn)||1;
-  const x=i=>P+i*(W-2*P)/(pts.length-1), y=v=>H-P-(v-mn)/sp*(H-2*P);
-  const d=pts.map((p,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
-  const up=vs[vs.length-1]>=vs[0], col=up?'#22c55e':'#ef4444';
-  const y1=y(1.0), base=(y1>=P&&y1<=H-P)?`<line x1="${P}" y1="${y1.toFixed(1)}" x2="${W-P}" y2="${y1.toFixed(1)}" stroke="#243049" stroke-width="1" stroke-dasharray="3 3"/>`:'';
+  // 净值曲线带坐标轴。Y 轴是累计收益率（净值-1），因为「涨了多少」
+  // 比「净值是几」更直接；X 轴标日期首末与中点。
+  // 不能用 preserveAspectRatio="none" —— 那会把文字横向拉变形。
+  // viewBox 宽高比必须接近实际渲染比例。此前 560×150 的 viewBox 被渲染到
+  // 1128×150 的区域，而默认 preserveAspectRatio 会保持 3.7:1 等比缩放，
+  // 于是左右留出大片空白、曲线挤在中间。改用接近 7.5:1 的 viewBox，
+  // 并显式 preserveAspectRatio="none" 让它填满宽度 ——
+  // 轴文字不会变形，因为宽高比已经与容器匹配。
+  const W=1120,H=150,L=58,R=14,T=12,B=26;
+  const iw=W-L-R, ih=H-T-B;
+  const rets=pts.map(p=>p.v-1);                       // 累计收益率
+  let mn=Math.min(...rets), mx=Math.max(...rets);
+  if(mx-mn<1e-9){mn-=0.01;mx+=0.01}
+  const pad=(mx-mn)*0.08; mn-=pad; mx+=pad;
+  const x=i=>L+i*iw/(pts.length-1);
+  const y=v=>T+ih-(v-mn)/(mx-mn)*ih;
+  const d=pts.map((p,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(p.v-1).toFixed(1)}`).join(' ');
+  const up=rets[rets.length-1]>=0, col=up?'#22c55e':'#ef4444';
+  const gid='g'+Math.random().toString(36).slice(2,8);
+
+  // Y 轴刻度：取 4 档，含 0 线
+  // Y 轴刻度直接标百分比，不另加标题 —— 标题放在左上会和顶部刻度重叠。
+  const ticks=[];
+  for(let i=0;i<=3;i++){
+    const v=mn+(mx-mn)*i/3;
+    ticks.push(`<line x1="${L}" y1="${y(v).toFixed(1)}" x2="${W-R}" y2="${y(v).toFixed(1)}"
+      stroke="#1b2437" stroke-width="1"/>
+      <text x="${L-6}" y="${(y(v)+3.5).toFixed(1)}" text-anchor="end"
+        font-size="11" fill="#8da2c4">${(v*100).toFixed(1)}%</text>`);
+  }
+  // 0 收益基准线：区分盈亏的那条
+  const zero=(0>=mn&&0<=mx)?`<line x1="${L}" y1="${y(0).toFixed(1)}" x2="${W-R}"
+    y2="${y(0).toFixed(1)}" stroke="#3b4a6b" stroke-width="1" stroke-dasharray="4 3"/>`:'';
+
+  // X 轴：首、中、末三个日期
+  const idx=[0,Math.floor((pts.length-1)/2),pts.length-1];
+  const xlab=idx.map((i,k)=>`<text x="${x(i).toFixed(1)}" y="${H-8}"
+    text-anchor="${k===0?'start':k===2?'end':'middle'}"
+    font-size="11" fill="#8da2c4">${pts[i].d}</text>`).join('');
+
+  const area=`M${x(0).toFixed(1)},${y(0>=mn?0:mn).toFixed(1)} `
+    + pts.map((p,i)=>`L${x(i).toFixed(1)},${y(p.v-1).toFixed(1)}`).join(' ')
+    + ` L${x(pts.length-1).toFixed(1)},${y(0>=mn?0:mn).toFixed(1)} Z`;
+
   return `<svg class="bChart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-    <defs><linearGradient id="g${Math.random().toString(36).slice(2,7)}" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="${col}" stop-opacity=".28"/><stop offset="100%" stop-color="${col}" stop-opacity="0"/>
+    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${col}" stop-opacity=".26"/>
+      <stop offset="100%" stop-color="${col}" stop-opacity="0"/>
     </linearGradient></defs>
-    ${base}<path d="${d}" fill="none" stroke="${col}" stroke-width="1.8"/></svg>`;
+    ${ticks.join('')}
+    ${zero}
+    <path d="${area}" fill="url(#${gid})"/>
+    <path d="${d}" fill="none" stroke="${col}" stroke-width="1.8"
+          stroke-linejoin="round"/>
+    <line x1="${L}" y1="${T}" x2="${L}" y2="${T+ih}" stroke="#243049" stroke-width="1"/>
+    <line x1="${L}" y1="${T+ih}" x2="${W-R}" y2="${T+ih}" stroke="#243049" stroke-width="1"/>
+    ${xlab}
+  </svg>`;
 }
+
 
 function bars(vals){
   if(!vals||!vals.length)return '';
@@ -1073,7 +1380,8 @@ function showEvals(){
         <div class="hd"><span class="nm">${esc(e.factor_name)}</span>
           <span class="tag ${p?'pass':'fail'}">${e.status}</span></div>
         ${descLine}
-        ${e.nav&&e.nav.length?sparkline(e.nav):''}
+        ${e.nav&&e.nav.length?`<div class="chartcap">多空组合累计收益（扣费后）</div>`
+                              +sparkline(e.nav):''}
         <div class="cmp">${pane('样本内 IS',e.is_ic,e.is_layers)}${pane('样本外 OOS',e.oos_ic,e.oos_layers,dec)}</div>
         ${e.fail_reason?`<div class="reason">${esc(e.fail_reason)}</div>`:''}
       </div>`}).join('')}`);

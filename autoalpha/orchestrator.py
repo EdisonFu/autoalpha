@@ -134,7 +134,7 @@ class FlowOrchestrator:
         more = page > 1
         yield sess.record(FlowEvent(
             EventKind.STAGE_START, Stage.SEARCH,
-            f"加载第 {page} 批论文" if more else f"检索与「{idea}」相关的论文"))
+            f"加载第 {page} 批参考资料" if more else f"检索与「{idea}」相关的文献与研报"))
         kind, conf = classify_input(idea)
         if not more:
             yield sess.record(FlowEvent(EventKind.LOG, Stage.SEARCH,
@@ -167,7 +167,7 @@ class FlowOrchestrator:
             # 这一批为空：保留上一批，不要把列表清掉
             yield sess.record(FlowEvent(
                 EventKind.LOG, Stage.SEARCH,
-                f"没有更多论文了（共 {total} 篇，已全部加载）"))
+                f"没有更多资料了（共 {total} 篇，已全部加载）"))
             papers = sess.papers
         else:
             sess.papers = papers
@@ -182,7 +182,7 @@ class FlowOrchestrator:
         has_more = bool(papers) and total > base + len(papers)
         yield sess.record(FlowEvent(
             EventKind.DATA, Stage.SEARCH,
-            f"找到 {len(papers)} 篇论文"
+            f"找到 {len(papers)} 篇参考资料"
             + (f"（第 {page} 批，已加载 {len(sess.papers)}/{total} 篇）"
                if total > len(papers) else ""),
             {"page": page, "total": total, "has_more": has_more,

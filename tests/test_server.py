@@ -218,3 +218,39 @@ def test_demo_includes_the_motivating_counterexample():
     assert bad, "应包含最高分位非最优的反例"
     tricky = [e for e in bad if e["is_ic"]["ic_tstat"] > 1.96]
     assert tricky, "反例应当 IC 显著——否则体现不出只看 IC 会被骗"
+
+
+def test_errors_are_json_not_plaintext():
+    """
+    未配置时 /api/start 曾抛未捕获异常，FastAPI 返回纯文本
+    "Internal Server Error"，前端 res.json() 报
+    "SyntaxError: Unexpected token 'I'" —— 用户看到的是 JSON 解析错误，
+    与真正的原因（没配模型）毫无关系。
+    """
+    import os
+    from fastapi.testclient import TestClient
+
+    saved = {k: os.environ.get(k) for k in
+             ("LLM_MODEL", "LLM_API_KEY", "ANTHROPIC_API_KEY",
+              "DEEPSEEK_API_KEY", "OPENAI_API_KEY")}
+    server._orch = None
+    try:
+        os.environ.pop("LLM_MODEL", None)
+        os.environ["LLM_API_KEY"] = "dummy"
+        c = TestClient(server.app, raise_server_exceptions=False)
+        r = c.post("/api/start", json={"idea": "x", "mode": "stepwise"})
+
+        assert r.status_code >= 400
+        body = r.json()                      # 必须可解析，否则前端就炸
+        assert body.get("detail"), "错误必须带 detail"
+        assert "LLM_MODEL" in body["detail"] or "模型" in body["detail"], \
+            "提示必须说清缺什么"
+        assert "演示" in body["detail"] or "LLM 配置" in body["detail"], \
+            "提示应给出可操作的下一步"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        server._orch = None

@@ -73,12 +73,20 @@ DEMO_DATA = {
 }
 
 
-def _nav(seed, n=180, drift=0.0004):
+def _nav(seed, n=180, drift=0.0004, vol=0.009):
+    """
+    带漂移的随机游走。固定种子保证可复现。
+
+    原来用 math.sin 生成，画出来是规整的正弦波 —— 一眼就看得出是假数据，
+    而这是新用户看到的第一张图。随机游走更像真实净值。
+    """
+    import random
+    rng = random.Random(int(seed * 1000))
     out, v = [], 1.0
     for i in range(n):
-        v *= 1 + drift + 0.012 * math.sin(i * 0.7 + seed) * 0.5
+        v *= 1 + drift + rng.gauss(0, vol)
         out.append({"d": f"2024-{1 + i // 30:02d}-{1 + i % 28:02d}",
-                    "v": round(v, 5)})
+                    "v": round(max(v, 0.05), 5)})
     return out
 
 
@@ -121,6 +129,47 @@ DEMO_EVALS = [
           1.58, 0.60, 0.37, 0.18, 0.31,
           [-0.083, -0.066, -0.072, 0.008, 0.073], _nav(1.7, drift=0.0001),
           reason="|t|=1.58 < 1.96; 换手=0.313 > 0.30"),
+]
+
+# 延伸变体：围绕通过门控的基础因子展开。
+# 刻意包含一个「延伸后反而变差」的例子 —— 延伸不是免费的，
+# 只展示改进会让人误以为变体总能提升。
+DEMO_EXTENSIONS = [
+    {"base": "etf_cross_sectional_momentum",
+     "factor_name": "etf_momentum_vol_scaled",
+     "extension_type": "formula_variation",
+     "zh_what": "在原动量上按标的波动率缩放，削弱高波品种的权重主导。",
+     "rationale": "等权动量会被高波标的主导，波动率缩放让信号更均衡。"},
+    {"base": "etf_cross_sectional_momentum",
+     "factor_name": "etf_momentum_250d",
+     "extension_type": "param_variation",
+     "zh_what": "把回看窗口从 60 日延长到 250 日，捕捉更长周期的趋势。",
+     "rationale": "长短窗口反映不同投资者的持有期，经济含义不同而非单纯调参。"},
+    {"base": "etf_cross_sectional_momentum",
+     "factor_name": "etf_momentum_x_lowvol",
+     "extension_type": "combination",
+     "zh_what": "与低波因子正交组合，取动量强且波动低的标的。",
+     "rationale": "动量与低波历史相关性低，组合可降低单一信号的噪声。"},
+]
+
+DEMO_EXT_EVALS = [
+    _eval("etf_momentum_vol_scaled", "PASS",
+          "按波动率缩放后的动量，削弱高波品种的权重主导。",
+          3.88, 1.00, 0.94, 0.82, 0.10,
+          [-0.071, -0.008, 0.029, 0.067, 0.134], _nav(5.1, drift=0.0006),
+          decay=-0.08),
+    _eval("etf_momentum_250d", "PASS",
+          "回看窗口延长到 250 日的动量。",
+          2.96, 0.80, 0.63, 0.55, 0.06,
+          [-0.048, 0.004, 0.018, 0.042, 0.096], _nav(6.3, drift=0.00045),
+          decay=-0.21),
+    # 延伸也会失败：组合后换手升高、扣费后反而不如基础因子
+    _eval("etf_momentum_x_lowvol", "FAIL_IS",
+          "与低波因子正交组合，取动量强且波动低的标的。",
+          2.04, 0.40, 0.44, 0.19, 0.28,
+          [-0.032, 0.011, -0.006, 0.038, 0.051], _nav(7.7, drift=0.0002),
+          reason="单调性=0.400 < 0.6; 多空Sharpe=0.440 < 0.5"
+                 "（组合提高了换手，扣费后不如基础因子）"),
 ]
 
 DEMO_USAGE = {"calls": 0, "input_tokens": 0, "output_tokens": 0,

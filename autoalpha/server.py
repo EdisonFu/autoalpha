@@ -26,6 +26,25 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 app = FastAPI(title="AutoAlpha")
 
+
+@app.exception_handler(Exception)
+async def _json_errors(request, exc):
+    """
+    未捕获异常也要返回 JSON。
+
+    FastAPI 默认吐纯文本 "Internal Server Error"，前端 res.json() 直接抛
+    "SyntaxError: Unexpected token 'I'" —— 用户看到的是一个 JSON 解析错误，
+    和真正的原因（没配模型）毫无关系，无从下手。
+    """
+    from fastapi.responses import JSONResponse
+    import traceback
+    detail = str(exc) or exc.__class__.__name__
+    print(f"[Server] 未处理异常 {request.url.path}: "
+          f"{traceback.format_exc()[-600:]}")
+    return JSONResponse(status_code=500,
+                        content={"detail": detail,
+                                 "error_type": exc.__class__.__name__})
+
 _sessions: Dict[str, FlowSession] = {}
 _queues: Dict[str, queue.Queue] = {}
 _orch: Optional[FlowOrchestrator] = None
@@ -34,12 +53,25 @@ _data_registry = None
 _lock = threading.Lock()
 
 
+CONFIG_HINT = (
+    "LLM 尚未配置完成。请点右上角「LLM 配置」填入 API Key 与模型 ID，"
+    "或在启动前设置环境变量 LLM_API_KEY 与 LLM_MODEL。"
+    "想先看效果可用演示模式：python main.py --web --demo"
+)
+
+
 def get_orch() -> FlowOrchestrator:
     global _orch
     with _lock:
         if _orch is None:
-            _orch = FlowOrchestrator(
-                klines_dir=os.environ.get("AUTOALPHA_KLINES", DEFAULT_KLINES))
+            try:
+                _orch = FlowOrchestrator(
+                    klines_dir=os.environ.get("AUTOALPHA_KLINES",
+                                              DEFAULT_KLINES))
+            except EnvironmentError as e:
+                # 配置缺失是最常见的启动失败原因，必须说清怎么解决，
+                # 而不是让它冒泡成 500 纯文本
+                raise HTTPException(422, f"{e}。{CONFIG_HINT}") from e
     return _orch
 
 
@@ -169,7 +201,7 @@ def search(req: IntentReq):
         yield from orch.search_papers(sess, sess.idea)
         yield from orch.prepare_data(sess)
         yield FlowEvent(EventKind.AWAIT_INPUT, Stage.SELECT,
-                        "请选择要研究的论文", {"next": "select"})
+                        "请选择要研究的参考资料", {"next": "select"})
 
     if not _spawn(req.session_id, _gen):
         raise HTTPException(409, "上一阶段尚未结束，请稍候")
@@ -188,7 +220,7 @@ def more_papers(req: MoreReq):
         yield from orch.search_papers(sess, sess.idea,
                                       max_results=req.page_size, page=req.page)
         yield FlowEvent(EventKind.AWAIT_INPUT, Stage.SELECT,
-                        f"第 {req.page} 批论文已加载", {"next": "select"})
+                        f"第 {req.page} 批资料已加载", {"next": "select"})
 
     if not _spawn(req.session_id, _gen):
         raise HTTPException(409, "上一阶段尚未结束，请稍候")
@@ -526,10 +558,12 @@ def demo_payload():
     它正是本项目重心放在评估而非生成的理由。
     """
     from .demo import (DEMO_INTENT, DEMO_PAPERS, DEMO_SPECS, DEMO_DATA,
-                       DEMO_EVALS, DEMO_USAGE, DEMO_BANNER)
+                       DEMO_EVALS, DEMO_USAGE, DEMO_BANNER,
+                       DEMO_EXTENSIONS, DEMO_EXT_EVALS)
     return {"banner": DEMO_BANNER, "intent": DEMO_INTENT,
             "papers": DEMO_PAPERS, "specs": DEMO_SPECS, "data": DEMO_DATA,
-            "evals": DEMO_EVALS, "usage": DEMO_USAGE}
+            "evals": DEMO_EVALS, "usage": DEMO_USAGE,
+            "extensions": DEMO_EXTENSIONS, "ext_evals": DEMO_EXT_EVALS}
 
 
 @app.get("/api/health")

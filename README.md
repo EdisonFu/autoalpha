@@ -1,6 +1,6 @@
 # AutoAlpha
 
-**自动化量化研究智能体 —— 从一句研究方向，到一个经得起检验的因子。**
+**LLM 多智能体驱动的自动化因子挖掘系统 —— 一句研究方向，产出经得起样本外检验的 Alpha 因子。**
 
 [![tests](https://github.com/EdisonFu/autoalpha/actions/workflows/tests.yml/badge.svg)](https://github.com/EdisonFu/autoalpha/actions/workflows/tests.yml)
 [![lint](https://github.com/EdisonFu/autoalpha/actions/workflows/lint.yml/badge.svg)](https://github.com/EdisonFu/autoalpha/actions/workflows/lint.yml)
@@ -9,22 +9,61 @@
 
 [English](README.en.md) · 简体中文
 
-输入「A股ETF截面动量轮动」，系统自主完成一轮完整的量化研究：
-
 ```
-意图识别 → 多源检索 → 数据准备 → 因子假设 → 代码生成 → 因子评估 → 延伸探索
-   ↓          ↓          ↓          ↓          ↓          ↓          ↓
- 术语归一   三源并联   截面构建   可计算性   沙箱执行   IS/OOS    变体搜索
-           +跨源去重   +门槛推导   前置校验   +自修复    双层门控
+                    输入：「A股ETF截面动量轮动」
+                                ↓
+  ┌──────────────────────────────────────────────────────────┐
+  │  意图 Agent    口语 → 规范学术检索式 + 市场/资产/周期识别    │
+  │  检索 Agent    arXiv + OpenAlex + Crossref 并联 → 语义排序  │
+  │  概述 Agent    批量生成中文概述与相关性判断                  │
+  │  提取 Agent    论文 → 可计算的因子假设（注入数据约束）        │
+  │  实现 Agent    假设 → Python 代码 → 沙箱执行 → 定向自修复    │
+  │  评审 Agent    语义层面核查：经济逻辑 / 实现保真 / 过拟合风险 │
+  │  延伸 Agent    围绕通过的因子生成变体 + Jaccard 多样性过滤    │
+  └──────────────────────────────────────────────────────────┘
+                                ↓
+            确定性引擎：IS/OOS 双层门控 → 因子库
 ```
 
-这不是「让 LLM 写个因子公式」。每个环节都是一个**带约束、会自检、失败可恢复**
-的智能体：检索要判断相关性，提取要先知道有什么数据，代码要在沙箱里跑通并通过
-形状校验，评估要扛得住样本外。
+**7 个 LLM 智能体负责「生成与判断」，1 个确定性引擎负责「裁决」。**
+智能体可以犯错、可以幻觉、可以写出跑不通的代码 —— 引擎不会放行。
+切分、成本、门槛由引擎强制，智能体无法协商。
 
 ---
 
-## 为什么需要它
+## 它解决什么问题
+
+量化研究的真实瓶颈不是想不出因子，而是**三件事都很贵**：
+
+| 人工做法 | 耗时 | AutoAlpha |
+|---|---|---|
+| 查文献：读摘要、判断是否相关、翻译 | 数小时/批 | 三源并联召回 110 篇，带中文概述与相关性判断 |
+| 从论文到可运行代码：理解公式、对齐数据、调试 | 数小时/个 | 沙箱执行 + 按错误类型定向自修复 |
+| 严谨评估：分层、换手、扣费、样本外 | 容易偷懒 | 引擎强制，无法跳过 |
+
+一轮完整研究实测 **1–2 分钟、$0.15–0.22**（4 个因子，含检索与代码生成），
+产出可追溯到源文献的因子代码与完整回测。
+
+### 技术上难在哪
+
+**不是「让 LLM 写个公式」。** 这条链上每一步都有具体的工程约束：
+
+- **检索** —— 同一意图不同表述召回量差 **800 倍**（`ETF轮动` 18 篇 vs 规范英文 14,494 篇），
+  所以必须先做术语归一；且不同市场结论不能平移，要识别市场并加限定
+- **代码生成** —— LLM 产出的代码在 subprocess 沙箱执行，失败按
+  `NO_MAIN / SYNTAX / RUNTIME / DATA / TIMEOUT / LOGIC` 分类，
+  把**定向**修复建议回传重试，而不是笼统地说「报错了」
+- **形状校验** —— 两道检查拦在回测前：日期稀疏、截面退化。
+  这类因子代码能跑、CSV 正常，但 IC 恒为 0
+- **防泄漏** —— 切分由引擎持有，修复回路与经验记忆只能看 IS。
+  统计修正抓不住前瞻偏差：一个故意泄漏的 oracle 打出 Sharpe 35，
+  **完整通过了** Deflated Sharpe 与 PBO 检验
+- **经验记忆** —— 失败模式落库，下次生成同类因子时作为上下文注入，
+  避免重复踩同一个坑
+
+---
+
+## 为什么重心在评估
 
 LLM 生成因子很容易 —— 难的是**判断哪个因子值得信**。
 
@@ -43,207 +82,16 @@ IC 是秩相关，不含收益幅度信息，与分层收益脱节是已知现�
 100 个候选 × 5 次重复实测后写道：*"honest evaluation certifies passive
 benchmarks, **rejects every LLM-discovered strategy**"*。
 
-**所以本项目的重心不在生成，在评估。** 多数同类方案止步于 IC/ICIR，
-这里补了完整的回测层与双层门控：
+**所以本项目的重心不在生成，在评估。**
 
 | | 多数 LLM 挖因子项目 | AutoAlpha |
 |---|---|---|
 | 评估口径 | IC / ICIR | + 分层单调性、多空 Sharpe、换手、扣费后收益 |
 | 样本外 | 常缺失 | IS/OOS 切分由引擎持有，搜索阶段**无法访问** OOS |
-| 门槛 | 硬编码常量 | 由截面宽度推导（换数据集自动适配） |
+| 门槛 | 硬编码常量 | 由截面宽度推导，换数据集自动适配 |
 | 去重 | IC 序列相关 | 组合净值相关（实测前者漏判同族因子） |
 | 数据约束 | 无 | 提取阶段注入可用数据，禁止编造代理变量 |
-
----
-
-## 技术要点
-
-**检索不是关键词匹配。** 同一意图不同表述召回量差 800 倍
-（`ETF轮动` 18 篇 vs 规范英文表述 14,494 篇），所以先做意图归一，
-再三源并联（arXiv 预印本 + OpenAlex 研报 + Crossref/SSRN 工作论文）、跨源去重。
-
-**代码生成带自修复回路。** LLM 产出的代码在 subprocess 沙箱执行，
-失败按类型分流（语法/运行时/数据/超时），把定向修复建议回传重试。
-还有两道形状校验拦在回测前：日期稀疏、截面退化 —— 这类因子代码能跑、
-CSV 正常，但 IC 恒为 0。
-
-**防泄漏是结构性的，不靠约定。** 切分由 `SplitEngine` 持有，
-修复回路与经验记忆只能看 IS，OOS 每因子只读一次。
-统计修正抓不住前瞻偏差 —— 实测一个故意泄漏的 oracle 打出 Sharpe 35，
-**完整通过了** Deflated Sharpe 与 PBO 检验。
-
-**成本可控。** 单次完整运行约 $0.15–0.22（[实测分解](docs/TOKEN_COST.md)）。
-论文打分曾占 84.5% 成本，加截断后降 52%，召回无感。
-
----
-
-> ⚠️ **免责声明**：本项目是研究工具，不构成投资建议。
-> **通过门控 ≠ 可用于实盘** —— 门控只排除明显不可信的结果，不能证明因子会盈利。
-> 详见 [DISCLAIMER.md](DISCLAIMER.md)。
-
----
-
-## 功能概览
-
-```
-用户输入研究方向（如"动量因子"）
-    │
-    ▼
-┌─────────────────┐
-│  论文检索         │  搜索 arXiv q-fin 领域相关论文，LLM 语义打分，综合排序
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  因子提取         │  LLM 从论文摘要中提取 2-4 个可量化因子假设
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  因子实现         │  LLM 生成 Python 代码，沙箱（subprocess）执行，输出因子值 CSV
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  因子评估         │  计算 IC/ICIR/衰减比/覆盖率/月胜率，与质量门控对比
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  因子延伸         │  对通过评估的因子生成 3-5 个变体，自动评估
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  生成报告         │  输出 HTML 因子质量报告 + 写入 SQLite 因子库
-└─────────────────┘
-```
-
----
-
-## 界面一览
-
-每张图都是真实运行界面（`scripts/capture_screens.py` 可重新生成）。
-
-### 入口：说清你想研究什么
-
-![首页](docs/screenshots/01-home.png)
-
-一句话描述研究方向即可。**建议带上市场**（如「A股」「港股」「美股」）——
-不同市场的涨跌停、散户占比、做空限制差异很大，一个市场成立的结论往往不能平移。
-
-### Step 1 · 意图识别：把口语翻译成学术检索式
-
-![意图识别](docs/screenshots/04-step1-intent.png)
-
-这一步存在的理由很具体。同一个意图，表述不同召回量差 **800 倍**：
-
-| 检索式 | 命中 |
-|---|---|
-| `ETF轮动` | 18 |
-| `ETF rotation momentum` | 811 |
-| `cross-sectional momentum exchange-traded fund` | 14,494 |
-
-系统把输入归一成规范学术表述，识别市场、资产类别、因子族，
-并用中文复述它的理解——**识别错了你能在检索前就改掉**，而不是跑完才发现跑偏。
-
-### Step 2 · 资料检索：三个源并联，研报也要
-
-![资料检索](docs/screenshots/05-step2-papers.png)
-
-| 源 | 覆盖 |
-|---|---|
-| arXiv | q-fin 预印本 |
-| OpenAlex | 期刊 + 学位论文 + **机构研报**（NBER、Econstor） |
-| Crossref | 期刊 + **SSRN 工作论文**（DOI 前缀 `10.2139`） |
-
-实测单次召回 115 条、跨源去重后 110 条。每篇带**中文概述**与**相关性判断**，
-不必逐篇读英文摘要。文献类型、期刊、被引数、命中来源都标在卡片上。
-
-### Step 3 · 数据准备：先把截面弄干净
-
-![数据准备](docs/screenshots/06-step3-data.png)
-
-这一步不只是读数据，还在做两件容易被忽略的事：
-
-**按资产类别筛池。** 全池 117 只 ETF 的年化波动极差达 **200 倍**
-（国债 0.2% vs 原油 39.8%）。混在一个截面里做排序，结果会被资产类别主导
-而不是因子强弱——分层单调性这个核心判据就失去意义。只保留股票类后极差降到 2.2 倍。
-
-**门槛由数据推导而非写死。** `ic_mean_floor = t / √n_obs / √width`。
-写死 0.02 是按 24 个标的算的；换成 92 个标的后它过严 2.3 倍。
-
-### Step 4 · 因子假设：每个都讲清在做什么
-
-![因子假设](docs/screenshots/07-step4-hypotheses.png)
-
-从论文提取可实现的因子，每个给出**衡量什么 / 经济逻辑 / 计算要点**。
-提取时会把可用数据告知模型，并明确禁止自行编造代理变量——
-曾出现过模型一边声称可计算、一边偷偷用已实现波动率替代 VIX，
-还沿用美股校准的阈值。
-
-### Step 5 · 因子评估：IC 显著 ≠ 能赚钱
-
-![因子评估](docs/screenshots/08-step5-backtest.png)
-
-每个因子跑完整分层回测，样本内外并排呈现：
-
-```
-IS 层    t 值 > 推导门槛 · 分层单调性 > 0.6 · 多空Sharpe > 0.5 · 覆盖率 > 0.7 · 换手 < 上限
-OOS 层   扣费后Sharpe > 0.3 · Sharpe衰减 > -50% · 单调性 > 0.4 · 净值相关 < 0.7
-```
-
-IS 没过的因子**不会访问 OOS 数据**——切分由引擎持有，不靠调用方自觉。
-
-为什么要分层而不只看 IC？一个真实例子：某动量因子 IC 为正、月度胜率 66%，
-但分层年化收益是 `+5.4% / +2.6% / -2.3% / +7.5% / -6.3%`——
-**最高分位反而最差**。只看 IC/ICIR 的系统会把它判为有效。
-
-### 配置：LLM 与数据源都在页面上
-
-![LLM 配置](docs/screenshots/02-llm-config.png)
-
-密钥、模型、Base URL 都可在页面设置，支持任意 OpenAI 兼容端点。
-**单价由模型 ID 自动识别**，不用你去查价。密钥只回传掩码、只存进程内存、不落盘。
-「测试连通」做一次最小调用，坏配置立刻暴露。
-
-![数据源](docs/screenshots/03-data-sources.png)
-
-**不配置任何账号也能用**——此时走公共数据查询接口（本地 CSV、AKShare、BaoStock）。
-配置了账号则优先走你的平台。依赖库没装会如实标注「暂不可用」，
-而不是看起来成功、用时才失败。
-
-### 灵感池：最近业界在研究什么
-
-![灵感池](docs/screenshots/09-feeds.png)
-
-定期抓取 AlphaArchitect、Quantpedia、QuantInsti、NBER 的最新文章。
-RSS 不支持按词检索，所以是「先抓取入库、再本地筛选」，
-可按当前研究意图过滤。它回答的是「最近有什么新思路」，
-而检索回答的是「关于 X 有哪些文献」。
-
----
-
-## 文档
-
-| 文件 | 内容 |
-|---|---|
-| [CLAUDE.md](CLAUDE.md) | 开发指引：约定与踩过的坑（动手前先读） |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 如何参与 |
-| [DISCLAIMER.md](DISCLAIMER.md) | 免责声明 |
-| [docs/P0_BACKTEST_DESIGN.md](docs/P0_BACKTEST_DESIGN.md) | 回测层设计与实施记录 |
-| [docs/E2E_REVIEW.md](docs/E2E_REVIEW.md) | 端到端复盘与实测结论 |
-| [docs/TOKEN_COST.md](docs/TOKEN_COST.md) | 成本实测与省钱开关 |
-| [docs/OPTIMIZATION_PLAN_2026Q4.md](docs/OPTIMIZATION_PLAN_2026Q4.md) | 文献调研与优化路线 |
-| [README_WEB.md](README_WEB.md) | Web 控制台用法 |
-
----
-
-## 因子质量门控
-
-| 指标 | 门槛 | 说明 |
-|------|------|------|
-| IC 均值 | > 0.03 | 截面预测能力 |
-| ICIR | > 0.5 | 信号稳定性 |
-| IC 衰减比（5d/1d） | > 0.5 | 信号半衰期 |
-| 因子覆盖率 | > 0.8 | 避免稀疏 |
-| 月度胜率 | > 0.55 | IC > 0 的月份占比 |
-| 与已有因子最大相关 | < 0.7 | 去相关 |
+| 语义审查 | 无 | 独立评审 agent，解析失败时拒绝而非放行 |
 
 ---
 
@@ -258,126 +106,221 @@ pip install -e .
 python main.py --web --demo
 ```
 
-打开 http://127.0.0.1:8000 点「播放演示」，会用预置样例重放一轮完整流程 ——
-包括上面那个 IC 为正但最高分位最差的因子。不发起任何外部调用，数据标明为演示用。
+打开 http://127.0.0.1:8000 点「播放演示」，用预置样例重放一轮完整流程 ——
+包括上面那个 IC 为正但最高分位最差的因子。不发起任何外部调用。
 
-### 1. 安装
-
-```bash
-git clone https://github.com/EdisonFu/autoalpha.git
-cd autoalpha
-pip install -e ".[anthropic]"      # 或 ".[openai]"，按你用的供应商
-```
-
-数据平台 SDK 是可选的 —— **不装也能用**，此时走公共数据查询接口。
-需要接 Tushare 等平台时再装：`pip install -e ".[data,tushare]"`。
-
-### 2. 配置 LLM API Key
+### 跑真实流水线
 
 ```bash
-export LLM_API_KEY=...                # 你的 LLM 密钥
-export LLM_MODEL=<model-id>           # 模型 ID
+pip install -e ".[anthropic]"      # 或 ".[openai]"
 
-# 若使用 OpenAI 兼容端点，再设置：
-# export LLM_BASE_URL=https://.../v1
-
-# 可选：按百万 token 计价，用于成本统计
-# export LLM_PRICE_INPUT=3.0
-# export LLM_PRICE_OUTPUT=15.0
+export LLM_API_KEY=...             # 你的密钥
+export LLM_MODEL=<model-id>        # 模型 ID
+python main.py --web
 ```
 
-### 3. 运行
-
-```bash
-python main.py
-```
-
-输入研究方向，例如：
-```
-❯ 动量因子选股策略
-❯ 基于换手率的流动性因子
-❯ 机器学习多因子模型
-```
+密钥、模型、数据源都可在页面上配置，不必改环境变量。
+单价由模型 ID 自动识别，不用自己查。
 
 ---
 
-## 交互命令
+## 界面一览
 
-| 命令 | 说明 |
-|------|------|
-| `<研究方向>` | 搜索论文并运行完整流水线 |
-| `/library` | 查看已通过评估的因子库 |
-| `/data <路径>` | 注册本地数据文件（CSV/Parquet/Excel） |
-| `/source add tushare --token <TOKEN>` | 添加 VIP 数据源 |
-| `/help` | 查看完整帮助 |
-| `q` | 退出 |
+截图均为真实运行界面，`scripts/capture_screens.py` 可重新生成。
+
+### 入口
+
+![首页](docs/screenshots/01-home.png)
+
+一句话描述研究方向。**建议带上市场**（如「A股」「港股」）——
+不同市场的涨跌停、散户占比、做空限制差异很大，一个市场成立的结论往往不能平移。
+
+还没想好研究什么？点右上角「还没想好？看看大家最近在研究什么」，
+从量化圈最新文章里挑一条，点一下就填进输入框。
+
+### Step 1 · 意图识别
+
+![意图识别](docs/screenshots/04-step1-intent.png)
+
+把口语化输入归一成规范学术检索式，并识别市场、资产类别、因子族、周期。
+这一步的理由很具体 —— 同一意图不同表述，召回量差 **800 倍**：
+
+| 检索式 | 命中 |
+|---|---|
+| `ETF轮动` | 18 |
+| `ETF rotation momentum` | 811 |
+| `cross-sectional momentum exchange-traded fund` | 14,494 |
+
+系统用中文复述它的理解，**识别错了可以在检索前直接改**。
+
+### Step 2 · 资料检索
+
+![资料检索](docs/screenshots/05-step2-papers.png)
+
+三个源并联，召回的不只是论文：
+
+| 源 | 覆盖 |
+|---|---|
+| arXiv | q-fin 预印本 |
+| OpenAlex | 期刊 + 学位论文 + **机构研报**（NBER、Econstor） |
+| Crossref | 期刊 + **SSRN 工作论文**（DOI 前缀 `10.2139`） |
+
+实测单次召回 115 条、跨源去重后 110 条。每篇带**中文概述**与**相关性判断**。
+文献类型、期刊、被引数、命中来源都标在卡片上。资料多时可分批加载。
+
+### Step 3 · 数据准备
+
+![数据准备](docs/screenshots/06-step3-data.png)
+
+不只是读数据，还在做两件容易被忽略的事：
+
+**按资产类别筛池。** 全池 117 只 ETF 的年化波动极差达 **200 倍**
+（国债 0.2% vs 原油 39.8%）。混在一个截面里排序，结果会被资产类别主导
+而不是因子强弱 —— 分层单调性这个核心判据就失去意义。只留股票类后极差降到 2.2 倍。
+
+**门槛由数据推导。** `ic_mean_floor = t / √n_obs / √width`。
+写死 0.02 是按 24 个标的算的；换成 92 个标的后它过严 2.3 倍。
+
+### Step 4 · 因子假设
+
+![因子假设](docs/screenshots/07-step4-hypotheses.png)
+
+每个因子给出**衡量什么 / 经济逻辑 / 计算要点**。
+提取时会把可用数据告知模型，并禁止自行编造代理变量 ——
+曾出现过模型一边声称可计算、一边偷偷用已实现波动率替代 VIX，
+还沿用美股校准的阈值。
+
+### Step 5 · 因子评估
+
+![因子评估](docs/screenshots/08-step5-backtest.png)
+
+每个因子跑完整分层回测，净值曲线带坐标轴（Y 轴为累计收益率），
+样本内外并排呈现。IS 没过的因子**不会访问 OOS 数据**。
+
+### Step 6 · 延伸探索
+
+通过门控的因子可作为基础，围绕它生成结构化变体：
+
+- **参数变体** —— 不同窗口反映不同持有期，经济含义不同而非单纯调参
+- **公式变体** —— 同一概念的另一种数学表达
+- **正交组合** —— 与低相关因子组合，降低单一信号噪声
+
+变体之间做 Jaccard 多样性过滤，避免只是换个参数名。
+每个变体过同一套双层门控 —— **延伸不保证改进**，组合后换手升高、
+扣费后不如基础因子的情况是常态。
 
 ---
 
-## 项目结构
+## 因子评估门控
+
+```
+IS 层   |t| > 推导门槛 · 分层单调性 > 0.6 · 多空 Sharpe > 0.5
+        · 覆盖率 > 0.7 · 换手 < 按频率校准的上限
+OOS 层  扣费后 Sharpe > 0.3 · Sharpe 衰减 > -50%
+        · 单调性 > 0.4 · 与已有因子净值相关 < 0.7
+```
+
+**换手上限按调仓频率校准**（日频 0.60 / 周频 0.40 / 月频 0.15）。
+固定 0.30 会让日频因子永远不达标、月频轻松通过 —— 门槛变成频率的函数
+而非因子质量的函数。
+
+**预期大部分因子会失败。** 这是门控在工作 —— 弱信号区采纳率 1–7% 是文献报告的常态。
+
+---
+
+## 架构
 
 ```
 autoalpha/
-├── main.py                          # 交互式 CLI 入口
-├── requirements.txt
-└── autoalpha/
-    ├── llm.py                       # LLM 客户端（支持 多家 LLM 供应商）
-    ├── pipeline.py                  # 主流水线编排
-    ├── pipeline_state.py            # 数据结构：FactorSpec / FactorResult / FactorReport
-    ├── db.py                        # SQLite 因子库
-    ├── data_source.py               # 数据源适配器（AKShare/Tushare/Wind/聚宽/米筐）
-    ├── local_data.py                # 本地数据自动识别加载
-    ├── utils.py                     # 公共工具函数
-    └── agents/
-        ├── input_classifier.py      # 输入分类（idea/url/pdf/text）
-        ├── paper_search_agent.py    # arXiv 论文检索 + LLM 语义排序
-        ├── factor_extract_agent.py  # 从论文摘要提取因子假设
-        ├── factor_implement_agent.py # LLM 生成因子代码 + 沙箱执行
-        ├── factor_eval_agent.py     # IC/ICIR/衰减/覆盖率评估
-        ├── factor_extension_agent.py # 生成因子延伸变体
-        └── report_agent.py          # 生成 HTML 报告
+├── agents/
+│   ├── intent_agent.py          Step 1：意图归一 + 市场识别
+│   ├── paper_search_agent.py    Step 2：多源编排 + 语义排序
+│   ├── translate_agent.py       中文概述（批量调用）
+│   ├── factor_extract_agent.py  因子假设提取（注入数据约束）
+│   ├── factor_implement_agent.py 代码生成 + 沙箱 + 自修复
+│   ├── factor_extension_agent.py 延伸变体 + 多样性过滤
+│   └── factor_judge_agent.py    语义评审（fail-closed）
+├── sources/
+│   ├── arxiv.py / openalex.py / crossref.py   检索源
+│   ├── base.py                  统一 schema + 跨源去重
+│   └── feeds.py                 RSS 灵感池
+├── engine.py                    IS/OOS 切分 + 门槛推导 + 双层门控
+├── backtest.py                  分层组合 / 净值 / 换手 / 扣费
+├── metrics.py                   指标容器（字段名自带口径）
+├── universe.py                  资产分类 + 截面池构建
+├── data_config.py               数据源注册与选路
+├── json_repair.py               容错解析 LLM 输出
+├── orchestrator.py              分阶段编排，每阶段 yield 事件
+├── flow.py / server.py          事件模型 / FastAPI + SSE
+└── demo/                        演示数据
 ```
 
 ---
 
 ## 数据源
 
-默认使用 **AKShare**（免费，腾讯财经源）获取 CSI300 股票池日线数据。
+**不配置任何账号也能用** —— 此时走公共数据查询接口：
 
-支持接入 VIP 数据源：
+| 源 | 说明 |
+|---|---|
+| 本地 CSV | 任意目录，CSV 可直接放在该目录或任意子目录 |
+| AKShare | 公共接口，免费无需账号 |
+| BaoStock | 公共接口，免费无需账号 |
+
+配置了账号则优先走你的平台（Tushare / 聚宽 / 米筐 / Wind）。
+依赖库未安装会如实标注「暂不可用」，而不是看起来成功、用时才失败。
+凭据只存在于进程内存，不落盘、不回传。
+
+CSV 需含列：`trade_date, open, high, low, close, volume`
+
+---
+
+## 成本
+
+单次完整运行实测约 **$0.15–0.22**。页面有实时用量卡片，按调用目的分解。
+
+论文打分曾占 84.5% 成本（为展示 10 篇给 200 篇全部打分），
+加截断后降 52%，召回无感。详见 [docs/TOKEN_COST.md](docs/TOKEN_COST.md)。
+
+---
+
+## 文档
+
+| 文件 | 内容 |
+|---|---|
+| [CLAUDE.md](CLAUDE.md) | 开发指引：约定与踩过的坑（动手前先读） |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 如何参与 |
+| [DISCLAIMER.md](DISCLAIMER.md) | 免责声明 |
+| [README_WEB.md](README_WEB.md) | Web 控制台用法与 API |
+| [docs/P0_BACKTEST_DESIGN.md](docs/P0_BACKTEST_DESIGN.md) | 回测层设计与实施记录 |
+| [docs/E2E_REVIEW.md](docs/E2E_REVIEW.md) | 端到端复盘与实测结论 |
+| [docs/TOKEN_COST.md](docs/TOKEN_COST.md) | 成本实测与省钱开关 |
+| [docs/UI_LAYOUT_PLAN.md](docs/UI_LAYOUT_PLAN.md) | 界面布局优化（含实测数据） |
+| [docs/OPTIMIZATION_PLAN_2026Q4.md](docs/OPTIMIZATION_PLAN_2026Q4.md) | 文献调研与优化路线 |
+
+---
+
+## 测试
 
 ```bash
-# Tushare Pro
-/source add tushare --token YOUR_TOKEN
-
-# Wind（需本地安装 Wind 终端）
-/source add wind
-
-# 聚宽
-/source add joinquant --username 手机号 --password 密码
-
-# 米筐
-/source add ricequant --username 账号 --password 密码
-
-# 本地 CSV/Parquet 文件
-/data ./my_factor_data.csv
+pytest tests/ --ignore=tests/test_e2e_ui.py   # 单元 + 集成，无需网络
+pytest tests/test_e2e_ui.py                   # 真实浏览器（需本地 Chrome）
 ```
 
+有三条测试是**能力证明**，改动回测层后必须仍然通过：
+
+- 用未来收益构造的泄漏因子**必须被抓出**（Sharpe > 3、单调性 > 0.9）
+- 纯随机因子**必须显示无边际**
+- 权重 `shift(1)` 与不 shift 的结果**必须不同**
+
+这三条失效，意味着回测不再能区分真信号与噪声。
+
 ---
 
-## 输出
+> ⚠️ **免责声明**：本项目是研究工具，不构成投资建议。
+> **通过门控 ≠ 可用于实盘** —— 门控只排除明显不可信的结果，不能证明因子会盈利。
+> 详见 [DISCLAIMER.md](DISCLAIMER.md)。
 
-- **因子代码**：`./output/factors/<factor_name>_<timestamp>.py`
-- **因子值 CSV**：`./output/factors/<factor_name>_<timestamp>.csv`
-- **HTML 报告**：`./output/reports/factor_report_<timestamp>.html`
-- **因子库**：`autoalpha.db`（SQLite）
+## License
 
----
-
-## 技术栈
-
-- **LLM**：任意 OpenAI 兼容或 Anthropic 协议端点（由 LLM_MODEL 指定）
-- **数据**：AKShare（腾讯财经源）
-- **IC 计算**：scipy.stats.spearmanr
-- **代码沙箱**：subprocess 隔离执行（超时 120s）
-- **存储**：SQLite
+MIT — 见 [LICENSE](LICENSE)。

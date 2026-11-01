@@ -1,6 +1,6 @@
 # AutoAlpha
 
-**An autonomous quant-research agent — from one research direction to a factor that survives scrutiny.**
+**An LLM multi-agent system for automated alpha factor mining — one research direction in, factors that survive out-of-sample testing out.**
 
 [![tests](https://github.com/EdisonFu/autoalpha/actions/workflows/tests.yml/badge.svg)](https://github.com/EdisonFu/autoalpha/actions/workflows/tests.yml)
 [![lint](https://github.com/EdisonFu/autoalpha/actions/workflows/lint.yml/badge.svg)](https://github.com/EdisonFu/autoalpha/actions/workflows/lint.yml)
@@ -9,25 +9,69 @@
 
 English · [简体中文](README.md)
 
-Give it a research direction. It runs a full research cycle on its own:
-
 ```
-intent → retrieval → data prep → hypotheses → codegen → evaluation → extension
-  ↓          ↓           ↓            ↓          ↓           ↓           ↓
-canonical  3 sources  universe   data-avail   sandboxed   IS/OOS     variant
- phrasing  + dedupe   + derived    precheck   + self-fix  two-stage   search
-                       gates                              gating
+              input: "cross-sectional momentum in A-share ETFs"
+                                ↓
+  ┌────────────────────────────────────────────────────────────────┐
+  │  Intent     informal text → canonical query + market detection │
+  │  Retrieval  arXiv + OpenAlex + Crossref in parallel → ranking  │
+  │  Summary    batched summaries and relevance judgements         │
+  │  Extract    papers → computable hypotheses (data-constrained)  │
+  │  Implement  hypothesis → Python → sandbox → targeted self-fix  │
+  │  Judge      economic soundness / fidelity / overfitting risk   │
+  │  Extend     variants around passing factors + diversity filter │
+  └────────────────────────────────────────────────────────────────┘
+                                ↓
+        deterministic engine: IS/OOS two-stage gating → library
 ```
 
-This is not "ask an LLM for a factor formula". Each stage is an agent that
-operates under constraints, checks its own output, and recovers from failure:
-retrieval judges relevance, extraction is told what data actually exists,
-generated code must run in a sandbox and pass shape checks, and evaluation has
-to survive out-of-sample.
+**Seven LLM agents generate and judge; one deterministic engine decides.**
+Agents can be wrong, hallucinate, or emit code that does not run — the engine
+does not let any of that through. The split, the costs and the thresholds are
+enforced by the engine and are not negotiable by an agent.
 
 ---
 
-## Why it exists
+## What it solves
+
+The real bottleneck in quant research is not running out of factor ideas.
+It is that three separate things are expensive:
+
+| Done by hand | Cost | AutoAlpha |
+|---|---|---|
+| Literature: read abstracts, judge relevance, translate | hours per batch | 110 records from three sources, each with a summary and a relevance call |
+| Paper → running code: parse formula, align data, debug | hours per factor | sandboxed execution with repair targeted by failure class |
+| Rigorous evaluation: layers, turnover, costs, OOS | easy to skip | enforced by the engine; cannot be skipped |
+
+A full cycle measures at **1–2 minutes and $0.15–0.22** (four factors, including
+retrieval and code generation), producing factor code traceable to its source
+paper along with a complete backtest.
+
+### What is technically hard
+
+**This is not "ask an LLM for a formula".** Every step carries a concrete
+engineering constraint:
+
+- **Retrieval** — the same intent phrased differently differs by **800x** in
+  recall (`ETF轮动` returns 18, the canonical English phrasing 14,494), so
+  terminology must be normalised first. Market matters too: conclusions do not
+  transfer across markets, so the market is detected and used to qualify the query.
+- **Code generation** — generated code runs in a subprocess sandbox. Failures
+  are classified as `NO_MAIN / SYNTAX / RUNTIME / DATA / TIMEOUT / ENV / LOGIC`
+  and fed back as *targeted* guidance rather than a generic "it failed".
+- **Shape checks** — two checks sit in front of the backtest: date sparsity and
+  cross-sectional degeneracy. Such factors run fine and emit a valid CSV while
+  their IC is identically zero.
+- **Leakage prevention** — the split lives in the engine; the repair loop and
+  experience memory only ever see in-sample data. Statistical correction does
+  not catch look-ahead bias: a deliberately leaky oracle posting a Sharpe of 35
+  passes Deflated Sharpe and PBO testing **completely**.
+- **Experience memory** — failure modes are persisted and injected as context
+  when generating similar factors later, so the same mistake is not repeated.
+
+---
+
+## Why the weight is on evaluation
 
 Generating factors with an LLM is easy. Knowing **which ones to trust** is not.
 
@@ -50,51 +94,14 @@ frontier models over 100 candidates with five repeats and reported that
 *"honest evaluation certifies passive benchmarks, **rejects every
 LLM-discovered strategy**"*.
 
-**So the weight of this project is on evaluation, not generation.** Most
-comparable tools stop at IC/ICIR; this one adds a full backtest layer and
-two-stage gating:
-
 | | Typical LLM factor miner | AutoAlpha |
 |---|---|---|
 | Metrics | IC / ICIR | plus layer monotonicity, long-short Sharpe, turnover, net-of-cost return |
 | Out-of-sample | often absent | split held by the engine; the search loop **cannot reach** OOS |
-| Thresholds | hardcoded constants | derived from cross-section width, so they adapt to the dataset |
+| Thresholds | hardcoded constants | derived from cross-section width, adapting to the dataset |
 | Deduplication | IC-series correlation | portfolio NAV correlation (the former misses same-family factors) |
 | Data constraints | none | availability injected at extraction; inventing proxies is forbidden |
-
----
-
-## What is technically interesting
-
-**Retrieval is not keyword matching.** The same intent phrased differently
-differs by 800x in recall — `ETF轮动` returns 18 hits while the canonical
-English phrasing returns 14,494. So intent is normalised first, then three
-sources run in parallel (arXiv preprints, OpenAlex reports, Crossref/SSRN
-working papers) and are deduplicated across sources.
-
-**Code generation has a repair loop.** Generated code runs in a subprocess
-sandbox. Failures are classified (syntax / runtime / data / timeout) and fed
-back as targeted repair guidance. Two shape checks sit in front of the
-backtest: date sparsity and cross-sectional degeneracy — factors that run
-fine and emit a valid CSV while their IC is identically zero.
-
-**Leakage prevention is structural, not conventional.** The split lives in
-`SplitEngine`; the repair loop and experience memory only ever see in-sample
-data, and OOS is read once per factor. Statistical correction does not catch
-look-ahead bias: a deliberately leaky oracle posting a Sharpe of 35 passes
-Deflated Sharpe and PBO testing **completely**.
-
-**Cost is bounded.** A full run measures at $0.15–0.22
-([breakdown](docs/TOKEN_COST.md)). Paper scoring once accounted for 84.5% of
-it; capping the scored set cut search-stage cost by 52% with no visible effect
-on recall.
-
----
-
-> ⚠️ **Disclaimer**: this is a research tool, not investment advice.
-> **Passing the gates does not mean a factor is fit for live trading** — gates
-> rule out results that are not credible; they cannot establish profitability.
-> See [DISCLAIMER.md](DISCLAIMER.md).
+| Semantic review | none | a separate judge agent that rejects, rather than passes, on a parse failure |
 
 ---
 
@@ -148,6 +155,16 @@ IS   |t| > derived threshold · monotonicity > 0.6 · LS Sharpe > 0.5
 OOS  net Sharpe > 0.3 · Sharpe decay > -50% · monotonicity > 0.4
      · NAV correlation < 0.7
 ```
+
+The turnover cap is calibrated per rebalance frequency (0.60 daily, 0.40
+weekly, 0.15 monthly). A fixed 0.30 would make daily factors unpassable and
+monthly ones trivial — the gate would measure frequency rather than quality.
+
+Factors that pass can seed an extension round: parameter variants, formula
+variants, and orthogonal combinations, filtered for diversity so variants are
+not just renamed parameters. Each variant faces the same two-stage gates, and
+extension does not guarantee improvement — a combination that raises turnover
+can end up worse than its base factor after costs.
 
 Thresholds are derived rather than fixed: `ic_mean_floor = t / sqrt(n_obs) /
 sqrt(width)`. A hardcoded 0.02 came from a 24-asset universe; at 92 assets it
