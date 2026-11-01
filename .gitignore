@@ -22,9 +22,6 @@ factors/
 data_cache/
 data/
 
-# Claude Code
-CLAUDE.md
-
 # macOS
 .DS_Store
 
