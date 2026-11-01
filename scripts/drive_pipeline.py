@@ -72,7 +72,9 @@ def run_once(port, idea, verbose=True):
     if code != 200:
         raise RuntimeError(f"start 失败 HTTP {code}")
     sid = r["session_id"]
-    say = (lambda m: print(f"    {m}")) if verbose else (lambda m: None)
+    say = ((lambda m: print(f"    {m}", flush=True))
+           if verbose else (lambda m: None))
+    say(f"session {sid}")
 
     t_search = time.time()
     d = _advance(base, sid, "/api/search", {},
@@ -99,6 +101,13 @@ def run_once(port, idea, verbose=True):
 
 
 def main():
+    # 后台运行时 stdout 默认全缓冲，进度看不到，容易误判为卡死
+    try:
+        import sys
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--idea", default="ETF截面动量因子")
