@@ -29,6 +29,7 @@ app = FastAPI(title="AutoAlpha")
 _sessions: Dict[str, FlowSession] = {}
 _queues: Dict[str, queue.Queue] = {}
 _orch: Optional[FlowOrchestrator] = None
+_running: Dict[str, threading.Thread] = {}   # 每会话当前阶段线程
 _lock = threading.Lock()
 
 
@@ -81,13 +82,23 @@ def _pump(sid: str, gen_factory):
         q.put(None)        # 结束哨兵
 
 
-def _spawn(sid: str, gen_factory):
-    # 复用同一个 Queue 对象：SSE 流在首次连接时已持有它的引用，
-    # 若这里换新对象，后续阶段的事件会写进没人读的队列
-    # （实测：加载第 2 批论文后 SSE 收不到任何事件）。
+def _spawn(sid: str, gen_factory) -> bool:
+    """
+    启动一个阶段生成器。若该会话已有阶段在运行则拒绝。
+
+    不加这道检查时，前一阶段未结束就收到下一阶段请求（界面快速连点、
+    或脚本按事件计数推进），两个生成器会并发写同一个 FlowSession ——
+    实测 stage 从 evaluate 倒退回 extract，随后卡住。
+    """
     _queues.setdefault(sid, queue.Queue())
-    t = threading.Thread(target=_pump, args=(sid, gen_factory), daemon=True)
-    t.start()
+    with _lock:
+        t = _running.get(sid)
+        if t is not None and t.is_alive():
+            return False
+        th = threading.Thread(target=_pump, args=(sid, gen_factory), daemon=True)
+        _running[sid] = th
+        th.start()
+    return True
 
 
 # ── API ──────────────────────────────────────────────────────────────────────
@@ -133,7 +144,8 @@ def select(req: SelectReq):
         yield FlowEvent(EventKind.AWAIT_INPUT, Stage.IMPLEMENT,
                         "请选择要实现的因子假设", {"next": "run"})
 
-    _spawn(req.session_id, _gen)
+    if not _spawn(req.session_id, _gen):
+        raise HTTPException(409, "上一阶段尚未结束，请稍候")
     return {"ok": True, "n_selected": len(picked)}
 
 
@@ -158,7 +170,8 @@ def search(req: IntentReq):
         yield FlowEvent(EventKind.AWAIT_INPUT, Stage.SELECT,
                         "请选择要研究的论文", {"next": "select"})
 
-    _spawn(req.session_id, _gen)
+    if not _spawn(req.session_id, _gen):
+        raise HTTPException(409, "上一阶段尚未结束，请稍候")
     return {"ok": True}
 
 
@@ -176,7 +189,8 @@ def more_papers(req: MoreReq):
         yield FlowEvent(EventKind.AWAIT_INPUT, Stage.SELECT,
                         f"第 {req.page} 批论文已加载", {"next": "select"})
 
-    _spawn(req.session_id, _gen)
+    if not _spawn(req.session_id, _gen):
+        raise HTTPException(409, "上一阶段尚未结束，请稍候")
     return {"ok": True, "page": req.page}
 
 
@@ -193,7 +207,8 @@ def run(req: RunReq):
                         {"can_extend": any(e.status == "PASS"
                                            for e in sess.evaluations)})
 
-    _spawn(req.session_id, _gen)
+    if not _spawn(req.session_id, _gen):
+        raise HTTPException(409, "上一阶段尚未结束，请稍候")
     return {"ok": True}
 
 
@@ -209,7 +224,8 @@ def extend(req: RunReq):
         yield FlowEvent(EventKind.AWAIT_INPUT, Stage.IMPLEMENT,
                         "延伸假设已生成，可选择实现", {"next": "run"})
 
-    _spawn(req.session_id, _gen)
+    if not _spawn(req.session_id, _gen):
+        raise HTTPException(409, "上一阶段尚未结束，请稍候")
     return {"ok": True}
 
 

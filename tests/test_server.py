@@ -2,6 +2,7 @@
 server.py 契约测试。
 """
 
+import os
 import queue
 import time
 
@@ -94,3 +95,67 @@ def test_session_papers_accumulate_across_pages():
     sess.papers = sess.papers + [
         p for p in batch2 if (p.get("title"), p.get("pdf_url")) not in known]
     assert len(sess.papers) == 15, "重复论文被二次累积"
+
+
+def test_spawn_rejects_concurrent_stage():
+    """
+    同一会话不得同时跑两个阶段。实测两个生成器并发写 FlowSession 时，
+    stage 会从 evaluate 倒退回 extract 然后卡死。
+    """
+    import threading
+    import time
+
+    sid = "reentry"
+    server._queues.pop(sid, None)
+    server._running.pop(sid, None)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow():
+        started.set()
+        release.wait(5)
+        return
+        yield                      # 使其成为生成器
+
+    assert server._spawn(sid, slow) is True
+    started.wait(3)
+    assert server._spawn(sid, lambda: iter([])) is False, "重入必须被拒绝"
+
+    release.set()
+    for _ in range(50):
+        if not server._running[sid].is_alive():
+            break
+        time.sleep(0.05)
+    assert server._spawn(sid, lambda: iter([])) is True, "上一阶段结束后应可再启动"
+
+    server._queues.pop(sid, None)
+    server._running.pop(sid, None)
+
+
+@pytest.mark.skipif(not os.environ.get("LLM_MODEL"),
+                    reason="需要 LLM_MODEL 才能构造 orchestrator")
+def test_endpoints_return_409_when_busy():
+    """端点层面的重入拒绝（需真实环境变量，CI 无 LLM_MODEL 时跳过）。"""
+    from fastapi.testclient import TestClient
+    import threading, time
+    from autoalpha.flow import FlowSession
+
+    c = TestClient(server.app)
+    sid = "busy-test"
+    server._sessions[sid] = FlowSession(idea="x")
+    server._queues.pop(sid, None)
+    server._running.pop(sid, None)
+    release = threading.Event()
+
+    def slow():
+        release.wait(5)
+        return
+        yield
+
+    server._spawn(sid, slow)
+    time.sleep(0.1)
+    assert c.post("/api/run", json={"session_id": sid}).status_code == 409
+    release.set(); time.sleep(0.2)
+    for d in (server._sessions, server._queues, server._running):
+        d.pop(sid, None)
