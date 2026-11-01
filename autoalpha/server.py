@@ -264,6 +264,45 @@ def usage():
         return {"error": str(e)}
 
 
+class FeedReq(BaseModel):
+    keywords: Optional[List[str]] = None
+    limit: int = 30
+
+
+@app.post("/api/feeds/refresh")
+def feeds_refresh():
+    """抓取量化博客/机构 RSS 并入库。RSS 不支持按词检索，故先抓后筛。"""
+    from .sources.feeds import refresh
+    try:
+        return refresh(get_orch().db.db_path)
+    except Exception as e:
+        raise HTTPException(500, f"抓取失败: {e}")
+
+
+@app.post("/api/feeds")
+def feeds_list(req: FeedReq):
+    """本地筛选已抓条目。不传关键词则返回最新。"""
+    from .sources.feeds import FeedStore
+    st = FeedStore(get_orch().db.db_path)
+    return {"items": st.search(req.keywords, req.limit), **st.stats()}
+
+
+@app.get("/api/feeds/suggest/{session_id}")
+def feeds_suggest(session_id: str):
+    """按当前会话的意图，从灵感池里挑相关条目。"""
+    from .sources.feeds import FeedStore
+    sess = _sessions.get(session_id)
+    if not sess:
+        raise HTTPException(404, "session not found")
+    kws = []
+    if sess.intent is not None:
+        kws = [sess.intent.factor_family, sess.intent.asset_class]
+        kws += [w for t in sess.intent.query_terms(2) for w in t.split()
+                if len(w) > 4][:4]
+    st = FeedStore(get_orch().db.db_path)
+    return {"items": st.search([k for k in kws if k and k != "unknown"], 12)}
+
+
 @app.get("/api/library")
 def library():
     try:

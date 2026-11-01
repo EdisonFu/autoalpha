@@ -42,6 +42,22 @@ curl -s http://127.0.0.1:8765/api/usage | python3 -m json.tool
 
 成本构成与省钱开关见 `docs/TOKEN_COST.md`。
 
+## 灵感池（RSS）
+
+量化博客与机构的最新文章，回答「最近业界在研究什么」。
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/feeds/refresh      # 抓取入库
+curl -X POST http://127.0.0.1:8765/api/feeds \
+     -H 'Content-Type: application/json' \
+     -d '{"keywords":["momentum","etf"],"limit":10}'      # 本地筛选
+```
+
+实测源（均带摘要）：AlphaArchitect 5 · Quantpedia 10 · QuantInsti 15 · NBER 35。
+
+与 Step 2 检索的区别：RSS **不支持按关键词查**，只给最新 N 条。
+所以这里是「先抓取入库 → 本地筛选」，不是检索源。页面上可按当前研究意图过滤。
+
 ## 界面展示什么
 
 - **数据与样本切分** — 标的数、截面宽度、IS/OOS 区间与天数、由宽度推导的 IC/t 门槛
@@ -50,6 +66,7 @@ curl -s http://127.0.0.1:8765/api/usage | python3 -m json.tool
 - **因子假设** — 每个带**中文说明**（衡量什么 / 经济逻辑 / 计算要点）+ 公式、参数，
   可勾选要实现哪些
 - **Token 用量** — 调用次数、输入/输出 token、估算花费、按用途分解
+- **灵感池** — 最新业界文章，可按研究意图筛选
 - **回测结果** — 每个因子一张卡片：
   - 多空组合净值曲线（SVG，标注 1.0 基线）
   - IS / OOS 并排对比：IC、t 值、ICIR（日/年双口径）、月度胜率、覆盖率
@@ -84,5 +101,8 @@ IS 未过的因子**不会**访问 OOS 数据 —— 切分由 `engine.SplitEngi
 ## 注意
 
 - 改动 `autoalpha/` 下任何文件后**必须重启服务**，否则仍跑旧代码
-- LLM 调用较慢，单个因子从生成到回测约需 10-40 秒
+- LLM 调用较慢，单个因子从生成到回测约需 10-40 秒。
+  代码生成阶段默认 3 路并发（`FlowOrchestrator(max_workers=3)`）——
+  实测单因子回测仅 1.9s，耗时几乎全在 LLM 调用与沙箱执行上。
+  评估阶段保持串行：去重基线需按确定顺序累积。
 - 大部分因子会 FAIL_IS，这是门控在工作 —— 弱信号区采纳率低是预期行为

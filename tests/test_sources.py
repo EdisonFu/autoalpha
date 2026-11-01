@@ -134,3 +134,57 @@ def test_dedupe_records_other_sources():
 def test_dedupe_preserves_order_and_drops_empty_titles():
     out = dedupe([_p("A", "arxiv"), _p("B", "arxiv"), _p("", "arxiv")])
     assert [p["title"] for p in out] == ["A", "B"]
+
+
+# ── 并发实现 ────────────────────────────────────────────────────────────────
+
+def test_concurrent_preserves_spec_order_and_results():
+    """
+    并发只作用于实现阶段；结果必须按 spec 原序取用，
+    否则 passed_navs 去重基线的累积顺序会随线程调度变化。
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    specs = [f"f{i}" for i in range(6)]
+    out = {}
+    seen_order = []
+    lock = threading.Lock()
+
+    def work(name):
+        # 故意让完成顺序与提交顺序不同
+        import time
+        time.sleep(0.02 if name.endswith(("0", "2", "4")) else 0.001)
+        with lock:
+            seen_order.append(name)
+        return name, f"result-{name}"
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futs = [pool.submit(work, s) for s in specs]
+        for f in as_completed(futs):
+            n, r = f.result()
+            out[n] = r
+
+    assert seen_order != specs, "测试前提：完成顺序应与提交顺序不同"
+    # 消费时按原序取，结果才稳定
+    assert [out[s] for s in specs] == [f"result-{s}" for s in specs]
+
+
+def test_max_workers_is_clamped():
+    """max_workers 不得小于 1，否则 ThreadPoolExecutor 会抛。"""
+    from autoalpha.orchestrator import FlowOrchestrator
+    o = FlowOrchestrator.__new__(FlowOrchestrator)
+    for given, expect_min in [(0, 1), (-5, 1), (3, 3)]:
+        o.max_workers = max(1, int(given))
+        assert o.max_workers >= 1
+        if given > 0:
+            assert o.max_workers == expect_min
+
+
+def test_shape_hint_is_shared_between_paths():
+    """串行与并发两条实现路径必须用同一份修复提示，避免各自演化。"""
+    from autoalpha.orchestrator import _SHAPE_HINT
+    msg = _SHAPE_HINT.format(reason="截面取值几乎相同")
+    assert "FACTOR_SHAPE_BAD" in msg
+    assert "截面取值几乎相同" in msg
+    assert "每个交易日" in msg

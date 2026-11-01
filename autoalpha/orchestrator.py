@@ -35,13 +35,27 @@ from .agents.intent_agent import IntentAgent
 
 DEFAULT_KLINES = "/Users/fuzhendong/GolandProjects/quant/factor-signal/data/klines"
 MAX_IMPLEMENT_RETRIES = 2
+
+# 因子形状不可用时给 LLM 的修复提示。串行与并发两条实现路径共用，
+# 避免两边提示词各自演化出不一致的说法。
+_SHAPE_HINT = (
+    "[FACTOR_SHAPE_BAD] 代码能运行，但产出的因子形状不可用：{reason}\n"
+    "若是日期稀疏：必须为【每个交易日】输出因子值，不要自行重采样到月末；\n"
+    "  调仓频率由回测框架决定，想表达月度逻辑请用更长的 lookback 窗口。\n"
+    "若是截面无区分度：这类因子的 IC 恒为 0，无法用于选股。常见成因：\n"
+    "  1. 用 np.tile / broadcast 把时序标量复制给所有标的 —— "
+    "截面因子必须让【不同标的在同一天取不同值】\n"
+    "  2. 只算了市场层面的聚合量（如指数动量），没有落到单个标的\n"
+    "修复方向：对每个标的分别计算其自身的特征，再做截面 rank 归一化。"
+)
 MAX_EXTENSIONS = 3
 
 
 class FlowOrchestrator:
     def __init__(self, klines_dir: str = DEFAULT_KLINES, freq: str = "etf-daily",
                  db_path: str = "autoalpha.db", output_dir: str = "./output",
-                 llm_config: dict = None, universe_preset: str = DEFAULT_PRESET):
+                 llm_config: dict = None, universe_preset: str = DEFAULT_PRESET,
+                 max_workers: int = 3):
         self.klines_dir = klines_dir
         self.freq = freq
         self.output_dir = output_dir
@@ -57,6 +71,7 @@ class FlowOrchestrator:
         self.intent_agent = IntentAgent(self.llm)
 
         self.universe_preset = universe_preset
+        self.max_workers = max(1, int(max_workers))
         self._engine: Optional[SplitEngine] = None
         self._raw_data: Optional[Dict] = None
         self._profile: Dict = {}
@@ -297,15 +312,11 @@ class FlowOrchestrator:
         for df in list(self._raw_data.values())[:3]:
             available.update(df.columns.tolist())
 
-        for i, spec in enumerate(specs, 1):
-            yield sess.record(FlowEvent(
-                EventKind.PROGRESS, Stage.IMPLEMENT,
-                f"[{i}/{len(specs)}] {spec.factor_name}",
-                {"current": i, "total": len(specs), "factor": spec.factor_name}))
-
-            # 数据可用性前置检查（修 E2E_REVIEW P-2/P-4）：
-            # 不可计算的因子直接跳过，不浪费 codegen 调用与回测。
-            # 用户必须能区分「数据没有」和「测了但不达标」。
+        # 数据可用性前置检查（修 E2E_REVIEW P-2/P-4）：
+        # 不可计算的因子直接跳过，不浪费 codegen 调用与回测。
+        # 用户必须能区分「数据没有」和「测了但不达标」。
+        runnable = []
+        for spec in specs:
             skip = _check_data_available(spec, available)
             if skip:
                 ev = _skipped_eval(spec.factor_name, skip)
@@ -314,9 +325,27 @@ class FlowOrchestrator:
                     EventKind.DATA, Stage.EVALUATE,
                     f"{spec.factor_name} → SKIP_NO_DATA",
                     {"evaluation": evaluation_to_dict(ev)}))
-                continue
+            else:
+                runnable.append(spec)
 
-            factor, err = yield from self._implement_with_retry(sess, spec)
+        # 实现阶段并发。实测单因子回测仅 1.9s，而整轮耗时约 10 分钟 ——
+        # 时间几乎全在 LLM codegen 与沙箱执行上，这两者因子间互不依赖。
+        # 评估仍串行：passed_navs 是去重基线，必须按确定顺序累积，
+        # 否则同一批因子的判重结果会随线程调度变化。
+        impl_results = {}
+        if len(runnable) > 1 and self.max_workers > 1:
+            yield from self._implement_concurrent(sess, runnable, impl_results)
+
+        for i, spec in enumerate(runnable, 1):
+            yield sess.record(FlowEvent(
+                EventKind.PROGRESS, Stage.IMPLEMENT,
+                f"[{i}/{len(runnable)}] {spec.factor_name}",
+                {"current": i, "total": len(runnable), "factor": spec.factor_name}))
+
+            if spec.factor_name in impl_results:
+                factor, err = impl_results[spec.factor_name]
+            else:
+                factor, err = yield from self._implement_with_retry(sess, spec)
             if factor is None:
                 ev = _failed_eval(spec.factor_name, err)
                 sess.evaluations.append(ev)
@@ -373,6 +402,81 @@ class FlowOrchestrator:
             {"n_pass": n_pass, "n_total": len(sess.evaluations),
              "n_tested": n_tested, "n_skip": n_skip, "usage": usage}))
 
+    def _implement_concurrent(self, sess: FlowSession, specs: List,
+                              out: Dict) -> Iterator[FlowEvent]:
+        """
+        并发跑 codegen + 沙箱。事件在主线程按完成顺序发出，
+        因为生成器不能跨线程 yield。
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        n = min(self.max_workers, len(specs))
+        yield sess.record(FlowEvent(
+            EventKind.LOG, Stage.IMPLEMENT,
+            f"并发生成 {len(specs)} 个因子的代码（{n} 路并行）"))
+
+        logs: List[tuple] = []          # (factor_name, message)
+
+        def _work(spec):
+            return spec.factor_name, self._implement_once(spec, logs)
+
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            futs = {pool.submit(_work, sp): sp for sp in specs}
+            done = 0
+            for fut in as_completed(futs):
+                sp = futs[fut]
+                done += 1
+                try:
+                    name, res = fut.result()
+                    out[name] = res
+                except Exception as e:
+                    out[sp.factor_name] = (None, f"并发实现异常: {e}")
+                yield sess.record(FlowEvent(
+                    EventKind.PROGRESS, Stage.IMPLEMENT,
+                    f"代码生成 {done}/{len(specs)}: {sp.factor_name}",
+                    {"current": done, "total": len(specs)}))
+
+        for name, msg in logs:
+            yield sess.record(FlowEvent(EventKind.LOG, Stage.IMPLEMENT,
+                                        f"{name}: {msg}"))
+
+    def _implement_once(self, spec, logs: List):
+        """
+        线程内执行：生成代码 → 沙箱 → 读回因子值。
+        不 yield 事件（跨线程不可行），消息先收集到 logs。
+        """
+        err_ctx = None
+        for attempt in range(1, MAX_IMPLEMENT_RETRIES + 2):
+            csv_path, impl_err = self.implement.implement(
+                spec, self._raw_data, err_ctx)
+            if impl_err:
+                etype = classify_error(impl_err)
+                logs.append((spec.factor_name,
+                             f"第{attempt}次失败[{etype}]: {impl_err[:110]}"))
+                if etype in ("TIMEOUT", "ENV"):
+                    return None, f"[{etype}] 不可恢复: {impl_err[:200]}"
+                if attempt > MAX_IMPLEMENT_RETRIES:
+                    return None, f"实现失败({attempt}次): {impl_err[:200]}"
+                err_ctx = impl_err
+                continue
+            try:
+                factor = _load_factor_csv(csv_path)
+            except Exception as e:
+                if attempt > MAX_IMPLEMENT_RETRIES:
+                    return None, f"因子文件读取失败: {e}"
+                err_ctx = f"输出的 CSV 无法解析为 MultiIndex(date,symbol) 序列: {e}"
+                continue
+
+            bad = (_sparse_dates(factor, self._engine)
+                   or _cross_section_degenerate(factor))
+            if bad is None:
+                return factor, None
+            logs.append((spec.factor_name, f"第{attempt}次因子形状不可用: {bad[:110]}"))
+            if attempt > MAX_IMPLEMENT_RETRIES:
+                return None, f"因子形状不可用: {bad}"
+            err_ctx = _SHAPE_HINT.format(reason=bad)
+        return None, "未知失败"
+
     def _implement_with_retry(self, sess: FlowSession, spec):
         """生成代码 → 沙箱执行 → 读回因子值。返回 (factor_series|None, err)。"""
         err_ctx = None
@@ -405,17 +509,7 @@ class FlowOrchestrator:
                 EventKind.LOG, Stage.IMPLEMENT, f"第{attempt}次截面退化: {bad}"))
             if attempt > MAX_IMPLEMENT_RETRIES:
                 return None, f"截面无区分度: {bad}"
-            err_ctx = (
-                f"[FACTOR_SHAPE_BAD] 代码能运行，但产出的因子形状不可用：{bad}\n"
-                "若是日期稀疏：必须为【每个交易日】输出因子值，不要自行重采样到月末；\n"
-                "  调仓频率由回测框架决定，想表达月度逻辑请用更长的 lookback 窗口。\n"
-                "若是截面无区分度：\n"
-                "这类因子的 IC 恒为 0，无法用于选股。常见成因：\n"
-                "  1. 用 np.tile / broadcast 把一个时序标量复制给所有标的 —— "
-                "     截面因子必须让【不同标的在同一天取不同值】\n"
-                "  2. 只算了市场层面的聚合量（如指数动量），没有落到单个标的\n"
-                "修复方向：对每个标的分别计算其自身的特征，再做截面 rank 归一化。"
-            )
+            err_ctx = _SHAPE_HINT.format(reason=bad)
         return None, "未知失败"
 
     # ── 阶段 6：延伸 ───────────────────────────────────────────────────────

@@ -191,6 +191,20 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   <div id="panels"></div>
 
   <div class="card">
+    <h3>灵感池 <span class="badge" id="feedBadge">未加载</span></h3>
+    <div style="font-size:11.5px;color:var(--fg2);line-height:1.65;margin-bottom:9px">
+      量化博客与机构最新文章（AlphaArchitect / Quantpedia / QuantInsti / NBER）。
+      RSS 不支持按词检索，所以先抓取入库，再本地筛选。
+    </div>
+    <div class="actions" style="margin-top:0">
+      <button class="ghost" onclick="refreshFeeds()">抓取最新</button>
+      <button class="ghost" onclick="loadFeeds()">查看</button>
+      <button class="ghost" onclick="suggestFeeds()">按当前意图筛选</button>
+    </div>
+    <div id="feedList"></div>
+  </div>
+
+  <div class="card">
     <h3>Token 用量</h3>
     <div id="usageBox"><div class="empty" style="padding:14px;font-size:12px">尚未调用</div></div>
   </div>
@@ -484,6 +498,50 @@ async function doExtend(){
   log('生成延伸假设');
   await fetch('/api/extend',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({session_id:SID})});
+}
+
+async function refreshFeeds(){
+  log('抓取 RSS 灵感池…');
+  try{
+    const r=await (await fetch('/api/feeds/refresh',{method:'POST'})).json();
+    log(`灵感池：抓取 ${r.fetched} 条，新增 ${r.added} 条`);
+    renderFeeds(null,r);
+    loadFeeds();
+  }catch(e){log('灵感池抓取失败：'+e,'err')}
+}
+
+async function loadFeeds(kws){
+  const r=await (await fetch('/api/feeds',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({keywords:kws||null,limit:20})})).json();
+  renderFeeds(r.items,r);
+}
+
+async function suggestFeeds(){
+  if(!SID){log('先开始一个研究会话','err');return}
+  const r=await (await fetch('/api/feeds/suggest/'+SID)).json();
+  log(`按意图筛选灵感池：${(r.items||[]).length} 条`);
+  renderFeeds(r.items);
+}
+
+function renderFeeds(items,stat){
+  if(stat&&$('feedBadge'))
+    $('feedBadge').textContent=`${stat.total||0} 条`;
+  if(!items)return;
+  const el=$('feedList');
+  if(!items.length){el.innerHTML='<div class="empty" style="padding:16px;font-size:12px">暂无条目，先点「抓取最新」</div>';return}
+  el.innerHTML=items.map(it=>`
+    <div class="item" style="cursor:default">
+      <div class="bd">
+        <div class="ti">${esc(it.title)}</div>
+        <div class="srcline">
+          <span class="badge2 src">${esc(it.source_label||it.feed||'')}</span>
+          ${it.published?`<span class="badge2">${esc(it.published)}</span>`:''}
+          ${it.url?`<span class="badge2"><a href="${esc(it.url)}" target="_blank"
+            rel="noopener" style="color:inherit">原文 ↗</a></span>`:''}
+        </div>
+        ${it.summary?`<div class="ab">${esc(it.summary)}</div>`:''}
+      </div></div>`).join('');
 }
 
 function showUsage(u){
