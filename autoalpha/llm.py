@@ -42,16 +42,54 @@ def _load_pricing() -> dict:
 _PRICING = _load_pricing()
 
 
+# 按模型 ID 的子串推断单价（美元/百万 token，input/output）。
+#
+# 不写死完整型号：各家命名频繁变动，精确匹配很快失效。按家族关键词匹配，
+# 同一家族内价格档位相对稳定。匹配不到就按 0 计价并标记 priced=False ——
+# 用量统计仍准确，只是不折算金额，好过给出一个错的数字。
+# 用户仍可用 LLM_PRICE_INPUT/OUTPUT 覆盖。
+_PRICE_RULES = [
+    # (关键词组, (input, output))  —— 全部关键词命中才算匹配，先到先得
+    (("opus",),            (5.00, 25.00)),
+    (("sonnet",),          (3.00, 15.00)),
+    (("haiku",),           (1.00,  5.00)),
+    (("gpt-4o", "mini"),   (0.15,  0.60)),
+    (("gpt-4o",),          (2.50, 10.00)),
+    (("o3", "mini"),       (1.10,  4.40)),
+    (("gpt-4", "turbo"),   (10.0, 30.00)),
+    (("deepseek", "reasoner"), (0.55, 2.19)),
+    (("deepseek",),        (0.27,  1.10)),
+    (("qwen", "max"),      (1.60,  6.40)),
+    (("qwen",),            (0.40,  1.20)),
+    (("glm",),             (0.60,  2.00)),
+    (("moonshot",),        (2.00,  5.00)),
+    (("gemini", "flash"),  (0.075, 0.30)),
+    (("gemini",),          (1.25,  5.00)),
+]
+
+
 def _price_for(model: str):
-    """返回 (input_price, output_price)，单位 美元/百万token。未知则 (0,0)。"""
-    if model in _PRICING:
-        return _PRICING[model]
+    """
+    返回 (input_price, output_price)，单位 美元/百万 token。
+
+    优先级：显式环境变量 > 精确表 > 关键词推断 > (0,0)。
+    """
     try:
         pin = float(os.environ.get("LLM_PRICE_INPUT", "") or 0)
         pout = float(os.environ.get("LLM_PRICE_OUTPUT", "") or 0)
+        if pin or pout:
+            return (pin, pout)
     except ValueError:
-        return (0.0, 0.0)
-    return (pin, pout)
+        pass
+
+    if model in _PRICING:
+        return _PRICING[model]
+
+    m = (model or "").lower()
+    for keys, price in _PRICE_RULES:
+        if all(k in m for k in keys):
+            return price
+    return (0.0, 0.0)
 
 
 class TokenMeter:

@@ -134,6 +134,16 @@ t 日收盘定的权重吃 t+1 日收益。`backtest.compute_nav` 的契约。
 曾因服务端日志里没有某条消息就断定「并发没触发」。
 那是 `FlowEvent`（走 SSE），本来就不落在 stdout。证据来源用错了。
 
+### 布局 bug 逃得过逻辑测试
+
+前端测试原来只在 Node 里跑逻辑（构造假 DOM、断言 innerHTML），
+数据源弹窗在矮视口下内容被裁掉且无法滚动——15 条逻辑断言全绿，
+用户一打开就撞上。
+
+凡涉及**尺寸、滚动、可见性、溢出**的断言，必须在真实浏览器里做
+（`tests/test_e2e_ui.py`，playwright）。假 DOM 没有布局引擎，
+`scrollHeight` / `bounding_box` 这类值在那里没有意义。
+
 ### 测试不可靠时先怀疑测试
 
 A/B 脚本连错七次。坏脚本确实撞出过一个真 bug（`_spawn` 缺重入保护），
@@ -144,7 +154,9 @@ A/B 脚本连错七次。坏脚本确实撞出过一个真 bug（`_spawn` 缺重
 ## 开发
 
 ```bash
-.venv/bin/python -m pytest tests/ -q          # 87 passed
+.venv/bin/python -m pytest tests/ -q          # 单元 + 集成
+.venv/bin/playwright install chromium         # E2E 需要一次性安装
+.venv/bin/python -m pytest tests/test_e2e_ui.py -q   # 真实浏览器
 .venv/bin/python scripts/drive_pipeline.py --port 8765   # 冒烟
 ```
 

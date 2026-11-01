@@ -300,7 +300,15 @@ def llm_config_get():
         "base_url": _os.environ.get("LLM_BASE_URL", ""),
         "price_input": _os.environ.get("LLM_PRICE_INPUT", ""),
         "price_output": _os.environ.get("LLM_PRICE_OUTPUT", ""),
+        # 由模型 ID 推断的单价，供界面展示 —— 用户不必自己查价
+        "inferred_price": _inferred_price(_os.environ.get("LLM_MODEL", "")),
     }
+
+
+def _inferred_price(model: str) -> dict:
+    from .llm import _price_for
+    pin, pout = _price_for(model)
+    return {"input": pin, "output": pout, "known": bool(pin or pout)}
 
 
 @app.post("/api/llm/config")
@@ -405,6 +413,47 @@ def data_source_set(req: DataSourceReq):
         warn = f"缺少凭据: {', '.join(cfg.missing_credentials())}"
     return {"ok": True, "active": reg.active(), "warning": warn,
             "sources": reg.status()}
+
+
+class KlinesDirReq(BaseModel):
+    path: str = ""
+
+
+@app.post("/api/data/dir")
+def data_dir_set(req: KlinesDirReq):
+    """
+    指定本地 K 线目录。留空恢复默认。
+    校验目录存在且含频率子目录，否则返回具体原因 ——
+    路径写错若静默接受，要等到跑流水线才暴露。
+    """
+    path = (req.path or "").strip()
+    if not path:
+        os.environ.pop("AUTOALPHA_KLINES", None)
+        _reset_data_cache()
+        return {"ok": True, "klines_dir": "(默认) factor-signal/data/klines"}
+
+    if not os.path.isdir(path):
+        raise HTTPException(422, f"目录不存在: {path}")
+    subs = [d for d in os.listdir(path)
+            if os.path.isdir(os.path.join(path, d))]
+    if not subs:
+        raise HTTPException(422, "目录下没有频率子目录（如 etf-daily/）")
+
+    os.environ["AUTOALPHA_KLINES"] = path
+    _reset_data_cache()
+    return {"ok": True, "klines_dir": path, "freqs": sorted(subs)[:8]}
+
+
+def _reset_data_cache():
+    """换了数据目录，已加载的行情与切分必须作废。"""
+    global _orch
+    with _lock:
+        if _orch is not None:
+            _orch.klines_dir = os.environ.get("AUTOALPHA_KLINES", DEFAULT_KLINES)
+            _orch._engine = None
+            _orch._raw_data = None
+            _orch._profile = {}
+            _orch._data_context = ""
 
 
 @app.get("/api/usage")

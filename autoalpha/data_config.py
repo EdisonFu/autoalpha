@@ -27,7 +27,7 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         # 兜底位：必须排在所有可配置源之后，否则用户配了账号也永远走不到。
         # 曾把它设成 5（最高优先），导致配置 Tushare 后 active 仍是 local。
         "priority": 999,
-        "note": "读取 AUTOALPHA_KLINES 指向的目录，无需联网",
+        "note": "公共接口：读取本地目录，无需联网、无需账号",
     },
     "akshare": {
         "label": "AKShare",
@@ -35,7 +35,7 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         "credentials": [],
         "free": True,
         "priority": 90,
-        "note": "免费，无需账号；pip install akshare",
+        "note": "公共数据查询接口，免费无需账号；pip install akshare",
     },
     "baostock": {
         "label": "BaoStock",
@@ -43,7 +43,7 @@ PROVIDERS: Dict[str, Dict[str, Any]] = {
         "credentials": [],
         "free": True,
         "priority": 80,
-        "note": "免费，无需账号；pip install baostock",
+        "note": "公共数据查询接口，免费无需账号；pip install baostock",
     },
     "tushare_pro": {
         "label": "Tushare Pro",

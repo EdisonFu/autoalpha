@@ -119,13 +119,24 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 
 /* 弹窗 */
 .mask{display:none;position:fixed;inset:0;z-index:50;background:rgba(5,8,14,.72);
-  backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:20px}
+  backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:20px;
+  overflow-y:auto}
 .mask.show{display:flex;animation:fade .2s ease}
+/* 数据源面板有 7 个源，内容必然超出视口：必须能滚动，
+   且标题与按钮固定，否则长列表里找不到「关闭」。 */
 .modal{background:linear-gradient(180deg,var(--card),var(--bg2));
-  border:1px solid var(--line);border-radius:16px;padding:22px;width:100%;
-  max-width:470px;box-shadow:0 24px 60px rgba(0,0,0,.5);animation:rise .24s ease}
+  border:1px solid var(--line);border-radius:16px;width:100%;
+  max-width:470px;box-shadow:0 24px 60px rgba(0,0,0,.5);animation:rise .24s ease;
+  max-height:calc(100vh - 40px);display:flex;flex-direction:column;overflow:hidden}
+.modal > h3{flex:none;padding:22px 22px 0}
+.modal .mbody{overflow-y:auto;padding:16px 22px 4px;flex:1;min-height:0}
+.modal > .actions{flex:none;padding:14px 22px 20px;margin-top:0;
+  border-top:1px solid var(--line)}
+.modal .mbody::-webkit-scrollbar{width:8px}
+.modal .mbody::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+.modal .mbody::-webkit-scrollbar-track{background:transparent}
 @keyframes rise{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}
-.modal h3{margin:0 0 16px;font-size:15px}
+.modal h3{margin:0 0 4px;font-size:15px}
 .mrow{margin-bottom:12px}
 .mrow2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
 .modal label{display:block;font-size:10.5px;color:var(--fg2);text-transform:uppercase;
@@ -250,6 +261,7 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   <div id="cfgMask" class="mask" onclick="if(event.target===this)closeCfg()">
   <div class="modal">
     <h3>LLM 配置</h3>
+    <div class="mbody">
     <div class="mrow">
       <label>API Key</label>
       <input id="cfgKey" type="password" placeholder="留空则保持当前密钥" autocomplete="off">
@@ -262,13 +274,11 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
       <label>Base URL</label>
       <input id="cfgBase" type="text" placeholder="OpenAI 兼容端点，留空用默认" autocomplete="off">
     </div>
-    <div class="mrow2">
-      <div><label>输入单价 $/M</label><input id="cfgPin" type="text" placeholder="3.0"></div>
-      <div><label>输出单价 $/M</label><input id="cfgPout" type="text" placeholder="15.0"></div>
-    </div>
+    <div id="cfgPrice" class="dsnote" style="margin-top:4px"></div>
     <div class="note">配置只存在于当前服务进程，不落盘。重启后需重新设置，
       或在启动前用 <code>LLM_API_KEY</code> / <code>LLM_MODEL</code> 环境变量。</div>
     <div id="cfgMsg" class="cfgmsg"></div>
+    </div>
     <div class="actions">
       <button onclick="saveCfg()">保存</button>
       <button class="ghost" onclick="testCfg()">测试连通</button>
@@ -280,10 +290,23 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 <div id="dataMask" class="mask" onclick="if(event.target===this)closeData()">
   <div class="modal" style="max-width:580px">
     <h3>数据源配置</h3>
-    <div class="note">不配置任何账号时走免费平台（本地 K 线 / AKShare / BaoStock）。
-      配置了账号则优先走你配置的平台。凭据只存在于当前服务进程，不落盘。</div>
-    <div id="dataList" style="margin-top:14px"></div>
-    <div id="dataMsg" class="cfgmsg"></div>
+    <div class="mbody">
+      <div class="note"><b style="color:var(--fg)">不配置任何账号也能用。</b>
+        此时系统走<b style="color:var(--acc)">公共数据查询接口</b>——
+        本地 K 线文件、AKShare、BaoStock，均免费且无需注册。<br>
+        配置了账号后，优先走你配置的平台（数据质量与覆盖通常更好）。
+        凭据只存在于当前服务进程，不落盘、不回传。</div>
+      <div class="mrow" style="margin-top:14px">
+        <label>本地数据目录</label>
+        <input id="dataDir" type="text" placeholder="留空用默认目录" autocomplete="off">
+        <div class="dsnote">需含 <code>etf-daily/</code> 等频率子目录，
+          CSV 列为 trade_date,open,high,low,close,volume</div>
+        <div class="actions" style="margin-top:8px">
+          <button class="ghost" onclick="saveDir()">保存目录</button></div>
+      </div>
+      <div id="dataList" style="margin-top:6px"></div>
+      <div id="dataMsg" class="cfgmsg"></div>
+    </div>
     <div class="actions"><button class="ghost" onclick="closeData()">关闭</button></div>
   </div>
 </div>
@@ -615,7 +638,12 @@ async function loadData(){
 }
 
 function openData(){
-  loadData().then(()=>{drawData();$('dataMask').classList.add('show')});
+  loadData().then(()=>{
+    drawData();
+    const d=$('dataDir');
+    if(d&&DATA&&!DATA.klines_dir.startsWith('(默认)'))d.value=DATA.klines_dir;
+    $('dataMask').classList.add('show');
+  });
 }
 function closeData(){$('dataMask').classList.remove('show')}
 
@@ -633,7 +661,8 @@ function drawData(){
     return `<div class="dsrow${s.ready?' act':''}">
       <div class="dshd">
         <span class="dsname">${esc(s.label)}</span>
-        ${s.free?'<span class="badge2">免费</span>':'<span class="badge2 dt-working_paper">需账号</span>'}
+        ${s.free?'<span class="badge2 dt-paper">公共接口 · 免费</span>'
+                :'<span class="badge2 dt-working_paper">需账号</span>'}
         ${badge}
       </div>
       <div class="dsnote">${esc(s.note)}</div>
@@ -644,6 +673,21 @@ function drawData(){
   const act=DATA.sources.find(x=>x.name===DATA.active);
   $('dataMsg').className='cfgmsg ok';
   $('dataMsg').textContent=`当前使用：${act?act.label:DATA.active}`;
+}
+
+async function saveDir(){
+  const path=$('dataDir').value.trim();
+  $('dataMsg').className='cfgmsg wait'; $('dataMsg').textContent='校验目录…';
+  try{
+    const r=await fetch('/api/data/dir',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
+    const j=await r.json();
+    if(!r.ok){$('dataMsg').className='cfgmsg err';$('dataMsg').textContent=j.detail||'设置失败';return}
+    $('dataMsg').className='cfgmsg ok';
+    $('dataMsg').textContent=`已设置：${j.klines_dir}`+(j.freqs?`（${j.freqs.join(', ')}）`:'');
+    log('数据目录：'+j.klines_dir);
+    loadData();
+  }catch(e){$('dataMsg').className='cfgmsg err';$('dataMsg').textContent='设置失败：'+e}
 }
 
 async function saveData(name){
@@ -685,14 +729,21 @@ function openCfg(){
       $('cfgKey').placeholder=c.has_key?`当前 ${c.key_masked}（留空不改）`:'必填';
       $('cfgModel').value=c.model||'';
       $('cfgBase').value=c.base_url||'';
-      $('cfgPin').value=c.price_input||'';
-      $('cfgPout').value=c.price_output||'';
+      showPrice(c);
     }
     cfgMsg('', '');
     $('cfgMask').classList.add('show');
   });
 }
 function closeCfg(){$('cfgMask').classList.remove('show')}
+
+function showPrice(c){
+  const e=$('cfgPrice'); if(!e)return;
+  const p=c&&c.inferred_price;
+  e.innerHTML = (p&&p.known)
+    ? `单价已自动识别：输入 $${p.input}/M · 输出 $${p.output}/M（用于成本统计）`
+    : '未能识别该模型单价，用量仍会统计，但不折算金额';
+}
 function cfgMsg(t,cls){const e=$('cfgMsg');if(e){e.textContent=t;e.className='cfgmsg '+(cls||'')}}
 
 async function saveCfg(){
@@ -702,9 +753,6 @@ async function saveCfg(){
   };
   const k=$('cfgKey').value.trim();
   if(k)body.api_key=k;
-  const pin=parseFloat($('cfgPin').value), pout=parseFloat($('cfgPout').value);
-  if(!isNaN(pin))body.price_input=pin;
-  if(!isNaN(pout))body.price_output=pout;
   if(!body.model){cfgMsg('请填写模型 ID','err');return}
 
   cfgMsg('保存中…','wait');
@@ -713,7 +761,7 @@ async function saveCfg(){
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const j=await r.json();
     if(!r.ok){cfgMsg(j.detail||'保存失败','err');return}
-    CFG=j; $('cfgKey').value='';
+    CFG=j; $('cfgKey').value=''; showPrice(j);
     const d=$('cfgDot'); if(d)d.className='dot on';
     cfgMsg('已保存，对后续会话生效','ok');
     log('LLM 配置已更新：'+(j.model||''));
