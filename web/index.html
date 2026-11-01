@@ -361,7 +361,10 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 const STEPS=[['intent','意图识别'],['search','资料检索'],['data','数据准备'],
              ['extract','因子假设'],['implement','代码实现'],['evaluate','双层回测'],
              ['done','完成']];
-const EXAMPLES=['基于动量的ETF轮动因子','波动率择时信号','量价背离反转因子','跨资产动量溢出'];
+// 示例都带市场：不同市场的制度与微观结构差异大，不指明市场
+// 会召回到别的市场的研究，导出的因子未必适用于本地数据。
+const EXAMPLES=['A股ETF截面动量轮动','A股小市值因子有效性',
+                '港股通标的量价背离反转','A股波动率择时信号'];
 let SID=null, ES=null, papers=[], specs=[], selP=new Set(), selS=new Set(), evals=[];
 let paperMore=false, paperPage=1, paperTotal=0, INTENT=null;
 
@@ -561,11 +564,17 @@ function showData(p){
 function showIntent(editable){
   if(!INTENT)return;
   const i=INTENT, conf=(i.confidence*100).toFixed(0);
-  const warn=i.confidence<0.5
-    ? `<div class="note" style="border-left-color:var(--warn)">
-       置信度偏低（${conf}%），建议补充研究方向，或直接修改下面的检索式。</div>` : '';
-  const chips=[['资产',i.asset_class],['因子族',i.factor_family],
-               ['周期',i.horizon],['文献偏好',i.doc_preference]]
+  const warns=[];
+  if(i.confidence<0.5)
+    warns.push(`置信度偏低（${conf}%），建议补充研究方向，或直接修改下面的检索式。`);
+  if(!i.market||i.market==='unknown')
+    warns.push('未识别到市场。不同市场的制度与微观结构差异大，'
+      +'不指明会召回到其它市场的研究。建议在研究方向里写明，如「A股」「港股」「美股」。');
+  const warn=warns.length
+    ? `<div class="note" style="border-left-color:var(--warn)">${warns.join('<br>')}</div>` : '';
+  const chips=[['市场',i.market_label||i.market],['资产',i.asset_class],
+               ['因子族',i.factor_family],['周期',i.horizon],
+               ['文献偏好',i.doc_preference]]
     .filter(x=>x[1]&&x[1]!=='unknown')
     .map(x=>`<span class="tagchip">${x[0]} <b>${esc(x[1])}</b></span>`).join('');
   panel('pIntent',`<h3>Step 1 · 研究意图 <span class="badge">置信度 ${conf}%</span></h3>

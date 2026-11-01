@@ -32,6 +32,7 @@ Output ONLY this JSON object:
 {
   "canonical_en": "the single best English academic phrasing of this topic",
   "aliases": ["3-5 alternative phrasings used in the literature"],
+  "market": "china_a|hk|us|japan|europe|global|unknown",
   "asset_class": "equity|etf|bond|commodity|crypto|fx|multi|unknown",
   "factor_family": "momentum|reversal|volatility|value|quality|size|liquidity|ml|macro|other",
   "horizon": "intraday|daily|weekly|monthly|quarterly|unknown",
@@ -44,6 +45,15 @@ Rules:
 - canonical_en must use the terminology the literature actually uses.
   "ETF轮动" is "cross-sectional momentum in exchange-traded funds",
   not a literal translation.
+- MARKET MATTERS. Markets differ in microstructure, retail share, price
+  limits, short-selling rules and settlement, so a finding in one market
+  often does not carry to another. Infer the market from wording
+  (A股/沪深/中证/创业板 → china_a; 港股/恒生 → hk; 美股/标普/纳指 → us),
+  from ticker shape, or from the user naming it outright.
+  When the market is identified, say so in canonical_en — e.g.
+  "cross-sectional momentum in Chinese A-share ETFs" — and add at least
+  one alias naming the market, so retrieval favours studies on it.
+  Use "unknown" only when nothing in the input suggests a market.
 - aliases should be genuinely different phrasings (synonyms, related
   methodology names), not trivial word reorderings. They widen recall.
 - doc_preference: choose "practitioner" when the user signals wanting
@@ -55,10 +65,29 @@ Output ONLY the JSON object, no explanation.
 """
 
 
+# 市场 → 检索时附加的限定词。不同市场的制度与微观结构差异大，
+# 在一个市场成立的结论常常不能平移到另一个。
+MARKET_TERMS = {
+    "china_a": ["Chinese A-share", "China stock market", "Shanghai Shenzhen"],
+    "hk":      ["Hong Kong stock market", "Hang Seng"],
+    "us":      ["US equity market", "S&P 500"],
+    "japan":   ["Japanese stock market", "TOPIX"],
+    "europe":  ["European equity market", "STOXX"],
+    "global":  ["international markets", "cross-country"],
+}
+
+MARKET_LABEL = {
+    "china_a": "A股", "hk": "港股", "us": "美股",
+    "japan": "日股", "europe": "欧股", "global": "全球",
+    "unknown": "未指定",
+}
+
+
 @dataclass
 class SearchIntent:
     canonical_en: str = ""
     aliases: List[str] = field(default_factory=list)
+    market: str = "unknown"
     asset_class: str = "unknown"
     factor_family: str = "other"
     horizon: str = "unknown"
@@ -68,12 +97,41 @@ class SearchIntent:
     raw_input: str = ""
 
     def query_terms(self, limit: int = 4) -> List[str]:
-        """供各检索源使用的查询词，规范表述优先。"""
+        """
+        供各检索源使用的查询词，规范表述优先。
+
+        已识别市场时补一条带市场限定的查询 —— 否则「ETF 动量」会把
+        美股研究排到前面，而数据是 A 股 ETF，导出的因子未必适用。
+        """
         terms = [self.canonical_en] if self.canonical_en else []
         for a in self.aliases:
             if a and a.lower() not in {t.lower() for t in terms}:
                 terms.append(a)
+
+        mt = MARKET_TERMS.get(self.market)
+        if mt and self.canonical_en:
+            # 市场词要【领头且短】。实测 Crossref 在长查询上排序很差：
+            #   "cross-sectional momentum in exchange-traded funds Chinese A-share"
+            #     → Exchange-traded notes / Sustainable Investing …
+            #   "Chinese A-share ETF momentum"
+            #     → ETF Momentum / How to Improve ETF Sector Momentum
+            # 所以不是把市场词缀在长句尾部，而是单独组一条短查询。
+            if mt[0].lower() not in self.canonical_en.lower():
+                terms.insert(1, f"{mt[0]} {self._core_terms()}".strip())
         return terms[:limit] or [self.raw_input]
+
+    _STOP = {"in", "of", "the", "a", "an", "for", "with", "and", "or", "on",
+             "to", "using", "based", "via", "from", "by", "its", "their"}
+
+    def _core_terms(self, n: int = 3) -> str:
+        """从规范表述里取几个实词，用于拼短查询。"""
+        words = [w for w in self.canonical_en.replace("-", " ").split()
+                 if w.lower() not in self._STOP]
+        return " ".join(words[:n])
+
+    @property
+    def market_label(self) -> str:
+        return MARKET_LABEL.get(self.market, self.market)
 
     @property
     def wants_reports(self) -> bool:
@@ -128,6 +186,7 @@ class IntentAgent:
         return SearchIntent(
             canonical_en=str(d.get("canonical_en") or raw).strip(),
             aliases=[str(a).strip() for a in aliases if str(a).strip()][:6],
+            market=str(d.get("market") or "unknown"),
             asset_class=str(d.get("asset_class") or "unknown"),
             factor_family=str(d.get("factor_family") or "other"),
             horizon=str(d.get("horizon") or "unknown"),

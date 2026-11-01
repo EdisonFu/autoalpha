@@ -88,7 +88,19 @@ t 日收盘定的权重吃 t+1 日收益。`backtest.compute_nav` 的契约。
 结果用户配了 Tushare 账号也永远走不到——配置形同虚设。
 凭据与 LLM 密钥同样只存内存、不落盘、不回传明文。
 
-**7. 失败必须可见。**
+**7. 检索必须区分市场。**
+不同市场的制度与微观结构差异大（涨跌停、散户占比、做空限制、结算），
+一个市场成立的结论常常不能平移。`SearchIntent.market` 从输入推断市场，
+并额外生成一条**市场词领头的短查询**。
+
+市场词不能缀在长句尾部——实测 Crossref 在长查询上排序很差：
+`"cross-sectional momentum in exchange-traded funds Chinese A-share"`
+召回的是 *Exchange-traded notes*，而 `"Chinese A-share ETF momentum"`
+召回的是 *ETF Momentum / How to Improve ETF Sector Momentum*。
+
+界面示例一律带市场（「A股ETF截面动量轮动」），未识别到市场时在意图面板提示。
+
+**8. 失败必须可见。**
 静默降级是本项目最贵的教训（见 §踩过的坑）。解析失败要留下可读提示，
 不要返回空值。`factor_judge` 解析失败时 **REJECT 而非 APPROVE**——
 审查缺失是扣留因子的理由，不是放行的理由。

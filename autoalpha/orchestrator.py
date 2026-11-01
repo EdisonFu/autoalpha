@@ -103,10 +103,17 @@ class FlowOrchestrator:
         sess.intent = intent
         self.paper_search.intent = intent
 
+        d = intent.to_dict()
+        d["market_label"] = intent.market_label
         yield sess.record(FlowEvent(
             EventKind.DATA, Stage.INTENT,
-            intent.restated_zh or intent.canonical_en,
-            {"intent": intent.to_dict()}))
+            intent.restated_zh or intent.canonical_en, {"intent": d}))
+
+        if intent.market == "unknown":
+            yield sess.record(FlowEvent(
+                EventKind.LOG, Stage.INTENT,
+                "未识别到市场。不同市场制度与微观结构差异大，"
+                "建议在研究方向里写明（如「A股」「港股」「美股」）"))
 
         if intent.confidence < 0.5:
             yield sess.record(FlowEvent(

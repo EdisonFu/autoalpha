@@ -188,3 +188,47 @@ def test_shape_hint_is_shared_between_paths():
     assert "FACTOR_SHAPE_BAD" in msg
     assert "截面取值几乎相同" in msg
     assert "每个交易日" in msg
+
+
+# ── 市场限定（不同市场特性差异大，召回必须区分）──────────────────────────
+
+def test_market_inferred_field_exists():
+    i = SearchIntent(canonical_en="momentum", market="china_a")
+    assert i.market_label == "A股"
+    assert SearchIntent().market == "unknown"
+
+
+def test_market_adds_a_leading_short_query():
+    """
+    市场词必须领头且短。实测 Crossref 在长查询上排序很差：
+      "cross-sectional momentum in exchange-traded funds Chinese A-share"
+        → Exchange-traded notes …（跑偏）
+      "Chinese A-share ETF momentum"
+        → ETF Momentum / How to Improve ETF Sector Momentum（对口）
+    """
+    i = SearchIntent(canonical_en="cross-sectional momentum in exchange-traded funds",
+                     aliases=["ETF rotation"], market="china_a")
+    terms = i.query_terms(4)
+    mk = [t for t in terms if "Chinese A-share" in t]
+    assert mk, "应生成带市场限定的查询"
+    assert mk[0].startswith("Chinese A-share"), "市场词应领头"
+    assert len(mk[0].split()) <= 6, f"市场查询应短: {mk[0]}"
+
+
+def test_unknown_market_adds_nothing():
+    i = SearchIntent(canonical_en="momentum in ETFs", aliases=["x"],
+                     market="unknown")
+    assert all("A-share" not in t for t in i.query_terms(4))
+
+
+def test_market_not_duplicated_when_already_present():
+    i = SearchIntent(canonical_en="momentum in Chinese A-share ETFs",
+                     market="china_a")
+    terms = i.query_terms(4)
+    assert len([t for t in terms if "Chinese A-share" in t]) == 1
+
+
+def test_core_terms_drops_stopwords():
+    i = SearchIntent(canonical_en="cross-sectional momentum in the exchange of funds")
+    core = i._core_terms(3)
+    assert " in " not in f" {core} " and " the " not in f" {core} "
