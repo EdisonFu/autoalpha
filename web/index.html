@@ -136,6 +136,15 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 .modal input:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(79,140,255,.15)}
 .cfgmsg{font-size:11.5px;margin-top:10px;line-height:1.6;font-family:var(--mono)}
 .cfgmsg.ok{color:var(--ok)} .cfgmsg.err{color:var(--bad)} .cfgmsg.wait{color:var(--fg2)}
+.dsrow{background:var(--card2);border:1px solid var(--line);border-radius:10px;
+  padding:12px;margin-bottom:9px;transition:.18s}
+.dsrow.act{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.05)}
+.dshd{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.dsname{font-size:13px;font-weight:600}
+.dsnote{font-size:11px;color:var(--fg2);margin-top:5px;line-height:1.55}
+.dsf{width:100%;background:#0d1320;border:1px solid var(--line);color:var(--fg);
+  padding:8px 10px;border-radius:7px;font-size:12px;outline:none;font-family:var(--mono)}
+.dsf:focus{border-color:var(--acc)}
 
 /* 步骤条：完成态的连接线 */
 .step.done::before{content:'';position:absolute;left:0;top:0;height:2px;width:100%;
@@ -219,6 +228,9 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   <header>
     <div class="logo">α</div>
     <div style="flex:1"><h1>AutoAlpha</h1></div>
+    <button class="ghost iconbtn" onclick="openData()" title="数据源配置">
+      <span id="dataDot" class="dot"></span>数据源
+    </button>
     <button class="ghost iconbtn" onclick="openCfg()" title="LLM 配置">
       <span id="cfgDot" class="dot"></span>LLM 配置
     </button>
@@ -265,6 +277,17 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   </div>
 </div>
 
+<div id="dataMask" class="mask" onclick="if(event.target===this)closeData()">
+  <div class="modal" style="max-width:580px">
+    <h3>数据源配置</h3>
+    <div class="note">不配置任何账号时走免费平台（本地 K 线 / AKShare / BaoStock）。
+      配置了账号则优先走你配置的平台。凭据只存在于当前服务进程，不落盘。</div>
+    <div id="dataList" style="margin-top:14px"></div>
+    <div id="dataMsg" class="cfgmsg"></div>
+    <div class="actions"><button class="ghost" onclick="closeData()">关闭</button></div>
+  </div>
+</div>
+
 <div class="steps" id="steps"></div>
   <div id="panels"></div>
 
@@ -294,7 +317,7 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 </div>
 
 <script>
-const STEPS=[['intent','意图识别'],['search','资料检索'],['data','数据切分'],
+const STEPS=[['intent','意图识别'],['search','资料检索'],['data','数据准备'],
              ['extract','因子假设'],['implement','代码实现'],['evaluate','双层回测'],
              ['done','完成']];
 const EXAMPLES=['基于动量的ETF轮动因子','波动率择时信号','量价背离反转因子','跨资产动量溢出'];
@@ -307,7 +330,7 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;',
 const fmt=(v,d=3)=>v==null||isNaN(v)?'—':Number(v).toFixed(d);
 const pct=v=>v==null||isNaN(v)?'—':(Number(v)*100).toFixed(2)+'%';
 
-loadCfg();
+loadCfg(); loadData();
 $('chips').innerHTML=EXAMPLES.map(e=>`<div class="chip" onclick="$('idea').value='${e}'">${e}</div>`).join('');
 $('idea').addEventListener('keydown',e=>{if(e.key==='Enter')start('stepwise')});
 
@@ -415,7 +438,7 @@ function showData(p){
        排除 <code>${(p.excluded||[]).join(', ')}</code>。
        异质资产（债券波动~2% vs 股票~25%）同池排序会让结果被资产类别主导，
        而非因子强弱。</div>` : '';
-  panel('pData',`<h3>数据与样本切分 <span class="badge">${p.n_symbols} 标的</span></h3>
+  panel('pData',`<h3>数据准备 <span class="badge">${p.n_symbols} 标的</span></h3>
   <div class="grid">
     <div class="kv"><div class="k">交易日</div><div class="v">${p.n_days}</div></div>
     <div class="kv"><div class="k">截面宽度</div><div class="v">${p.universe_width}</div></div>
@@ -579,6 +602,70 @@ async function doExtend(){
     body:JSON.stringify({session_id:SID})});
 }
 
+// ── 数据源配置 ──────────────────────────────────────────────────────────
+let DATA=null;
+
+async function loadData(){
+  try{
+    DATA=await (await fetch('/api/data/sources')).json();
+    const d=$('dataDot');
+    if(d)d.className='dot '+(DATA.active&&DATA.active!=='none'?'on':'off');
+    return DATA;
+  }catch(e){return null}
+}
+
+function openData(){
+  loadData().then(()=>{drawData();$('dataMask').classList.add('show')});
+}
+function closeData(){$('dataMask').classList.remove('show')}
+
+function drawData(){
+  if(!DATA)return;
+  const el=$('dataList');
+  el.innerHTML=DATA.sources.map(s=>{
+    const badge=s.ready?'<span class="badge2 dt-paper">使用中</span>'
+      :(!s.module_available?'<span class="badge2">依赖未安装</span>'
+      :(s.missing_credentials.length?'<span class="badge2 dt-report">待填凭据</span>':''));
+    const inputs=(s.needs||[]).map(f=>
+      `<input class="dsf" data-src="${s.name}" data-f="${f}" type="${f==='password'?'password':'text'}"
+        placeholder="${f}${s.missing_credentials.includes(f)?'':'（已配置，留空不改）'}"
+        style="margin-top:6px">`).join('');
+    return `<div class="dsrow${s.ready?' act':''}">
+      <div class="dshd">
+        <span class="dsname">${esc(s.label)}</span>
+        ${s.free?'<span class="badge2">免费</span>':'<span class="badge2 dt-working_paper">需账号</span>'}
+        ${badge}
+      </div>
+      <div class="dsnote">${esc(s.note)}</div>
+      ${inputs}
+      ${s.needs.length?`<div class="actions" style="margin-top:8px">
+        <button class="ghost" onclick="saveData('${s.name}')">保存</button></div>`:''}
+    </div>`;}).join('');
+  const act=DATA.sources.find(x=>x.name===DATA.active);
+  $('dataMsg').className='cfgmsg ok';
+  $('dataMsg').textContent=`当前使用：${act?act.label:DATA.active}`;
+}
+
+async function saveData(name){
+  const creds={};
+  document.querySelectorAll(`.dsf[data-src="${name}"]`).forEach(i=>{
+    if(i.value.trim())creds[i.dataset.f]=i.value.trim();
+  });
+  $('dataMsg').className='cfgmsg wait'; $('dataMsg').textContent='保存中…';
+  try{
+    const r=await fetch('/api/data/sources',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name,enabled:true,credentials:creds})});
+    const j=await r.json();
+    if(!r.ok){$('dataMsg').className='cfgmsg err';$('dataMsg').textContent=j.detail||'保存失败';return}
+    DATA={...DATA,sources:j.sources,active:j.active};
+    drawData();
+    if(j.warning){$('dataMsg').className='cfgmsg err';$('dataMsg').textContent=j.warning}
+    log('数据源已更新：'+name+(j.warning?'（'+j.warning+'）':''));
+    const d=$('dataDot'); if(d)d.className='dot on';
+  }catch(e){$('dataMsg').className='cfgmsg err';$('dataMsg').textContent='保存失败：'+e}
+}
+
 // ── LLM 配置 ────────────────────────────────────────────────────────────
 let CFG=null;
 
@@ -644,7 +731,7 @@ async function testCfg(){
 }
 
 document.addEventListener('keydown',e=>{
-  if(e.key==='Escape')closeCfg();
+  if(e.key==='Escape'){closeCfg();closeData();}
 });
 
 async function refreshFeeds(){

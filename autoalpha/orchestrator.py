@@ -252,7 +252,7 @@ class FlowOrchestrator:
     # ── 阶段 3：加载数据 + 建切分 ──────────────────────────────────────────
 
     def prepare_data(self, sess: FlowSession) -> Iterator[FlowEvent]:
-        yield sess.record(FlowEvent(EventKind.STAGE_START, Stage.DATA, "加载行情数据"))
+        yield sess.record(FlowEvent(EventKind.STAGE_START, Stage.DATA, "准备行情数据"))
         if self._engine is not None:
             yield sess.record(FlowEvent(EventKind.LOG, Stage.DATA, "复用已加载数据"))
         else:
@@ -275,7 +275,7 @@ class FlowOrchestrator:
         e = self._engine
         g = e.gates_for("is")
         yield sess.record(FlowEvent(
-            EventKind.DATA, Stage.DATA, "数据与切分就绪",
+            EventKind.DATA, Stage.DATA, "数据准备就绪",
             {"n_symbols": int(e.price_full.shape[1]),
              "n_days": int(len(e.price_full)),
              "is_range": [e.price_is.index[0].strftime("%Y-%m-%d"),

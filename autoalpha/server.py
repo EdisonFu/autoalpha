@@ -30,6 +30,7 @@ _sessions: Dict[str, FlowSession] = {}
 _queues: Dict[str, queue.Queue] = {}
 _orch: Optional[FlowOrchestrator] = None
 _running: Dict[str, threading.Thread] = {}   # 每会话当前阶段线程
+_data_registry = None
 _lock = threading.Lock()
 
 
@@ -359,6 +360,51 @@ def llm_test():
     return {"ok": True, "latency_ms": int((_time.time() - t0) * 1000),
             "reply": (out or "").strip()[:60],
             "usage": orch.llm.meter.summary()}
+
+
+class DataSourceReq(BaseModel):
+    name: str
+    enabled: bool = True
+    credentials: Dict[str, str] = {}
+
+
+def _registry():
+    from .data_config import DataSourceRegistry
+    global _data_registry
+    if _data_registry is None:
+        _data_registry = DataSourceRegistry()
+    return _data_registry
+
+
+@app.get("/api/data/sources")
+def data_sources():
+    """各数据源状态。不返回任何凭据值。"""
+    reg = _registry()
+    return {"sources": reg.status(), "active": reg.active(),
+            "klines_dir": os.environ.get("AUTOALPHA_KLINES", "")
+                          or "(默认) factor-signal/data/klines"}
+
+
+@app.post("/api/data/sources")
+def data_source_set(req: DataSourceReq):
+    """
+    配置一个数据源。凭据只留在本进程内存，不落盘。
+    留空的凭据字段表示保持原值，与 LLM 配置同一约定。
+    """
+    reg = _registry()
+    try:
+        cfg = reg.set(req.name, req.enabled, req.credentials)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+    from .data_config import module_available
+    warn = ""
+    if not module_available(req.name):
+        warn = "依赖库未安装，该源暂不可用"
+    elif cfg.missing_credentials():
+        warn = f"缺少凭据: {', '.join(cfg.missing_credentials())}"
+    return {"ok": True, "active": reg.active(), "warning": warn,
+            "sources": reg.status()}
 
 
 @app.get("/api/usage")

@@ -32,7 +32,7 @@ export LLM_API_KEY=...        LLM_MODEL=<model-id>
 ```
 Step 1 intent     意图识别：用户表述 → 规范学术检索式
 Step 2 search     多源召回 arXiv + OpenAlex + Crossref，跨源去重
-       data       加载行情、按资产类别筛池、建 IS/OOS 切分
+       data       数据准备：选源取数、按资产类别筛池、建 IS/OOS 切分
        extract    提取因子假设（注入可用数据约束）
        implement  LLM 生成代码 → 沙箱执行（3 路并发）
        evaluate   IS/OOS 双层门控（串行）
@@ -51,6 +51,7 @@ Step 2 search     多源召回 arXiv + OpenAlex + Crossref，跨源去重
 | `backtest.py` | 分层组合、净值、换手、扣费 |
 | `engine.py` | 持有 IS/OOS 切分、门槛推导、双层门控 |
 | `universe.py` | 资产分类与截面池构建 |
+| `data_config.py` | 数据源注册与选路（不配置走免费，配了走用户的） |
 | `orchestrator.py` | 分阶段编排，每阶段 yield `FlowEvent` |
 | `json_repair.py` | 容错解析 LLM 输出 |
 | `flow.py` / `server.py` | 事件模型 / FastAPI + SSE |
@@ -82,7 +83,12 @@ t 日收盘定的权重吃 t+1 日收益。`backtest.compute_nav` 的契约。
 `passed_navs` 是去重基线，必须按确定顺序累积，否则判重结果随线程调度变化。
 并发只作用于 implement 阶段。
 
-**6. 失败必须可见。**
+**6. 兜底源的优先级必须排在最后。**
+`data_config.PROVIDERS` 里 `local` 的 priority 是 999。曾设成 5（最优先），
+结果用户配了 Tushare 账号也永远走不到——配置形同虚设。
+凭据与 LLM 密钥同样只存内存、不落盘、不回传明文。
+
+**7. 失败必须可见。**
 静默降级是本项目最贵的教训（见 §踩过的坑）。解析失败要留下可读提示，
 不要返回空值。`factor_judge` 解析失败时 **REJECT 而非 APPROVE**——
 审查缺失是扣留因子的理由，不是放行的理由。
