@@ -170,3 +170,18 @@ def test_extract_recovers_damaged_json():
     specs = ag.extract({"title": "T", "abstract": "A"})
     assert len(specs) == 1 and specs[0].factor_name == "mom"
     assert not ag.last_error
+
+
+def test_prompt_forbids_placeholder_summaries():
+    """
+    不得让模型输出「摘要信息不足」「需查看全文」这类占位话。
+    用户要的是有用信息，而不是被告知信息不够 —— 摘要短时
+    应就标题与已有内容写出能写的部分。
+    """
+    from autoalpha.agents.translate_agent import _PAPER_SYSTEM
+    assert "不要写" in _PAPER_SYSTEM
+    assert "摘要信息不足" in _PAPER_SYSTEM, "须显式点名禁止该话术"
+    # 禁止句必须出现在否定语境里，而不是作为输出模板
+    idx = _PAPER_SYSTEM.index("摘要信息不足")
+    assert "不要写" in _PAPER_SYSTEM[max(0, idx - 60):idx], \
+        "该短语只能出现在禁止说明中，不可作为建议输出"
