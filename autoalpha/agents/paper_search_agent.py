@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import urllib.request
 import urllib.parse
@@ -12,6 +13,10 @@ from ..utils import strip_code_fence
 # 去掉 abs: 关键词过滤后召回更宽，适当多拉一些由 LLM 语义过滤
 _PREFETCH = 200
 
+# 每个检索源各自的召回上限。多源并联后总量约为其 2-3 倍，
+# 再经 _SCORE_LIMIT 截断，所以 LLM 打分调用数不随源数量增长。
+_PER_SOURCE = 25
+
 # 语义过滤时每批论文数（含摘要，控制 token 量）
 _FILTER_BATCH = 20
 
@@ -22,8 +27,22 @@ _FILTER_BATCH = 20
 # 需要更宽召回时调大此值。
 _SCORE_LIMIT = 60
 
-# 排序中时间项的权重。实测 0.4 会压倒相关性（见 _combined_sort 注释）。
-_RECENCY_W = 0.15
+# 排序权重。相关性始终是主导项（实测 0.4 的时间权重会压倒它，见 _combined_sort）。
+_REL_W     = 0.60    # LLM 语义相关性
+_RECENCY_W = 0.12    # 时效（半衰期衰减）
+_DOCTYPE_W = 0.18    # 文献类型
+_CITE_W    = 0.10    # 引用量（log 压缩）
+
+# 文献类型权重。研报与 SSRN 工作论文给到接近期刊的权重：对「这个策略
+# 实盘能不能用」这类问题，它们往往比纯理论论文更有信息量。
+_DOC_WEIGHT = {
+    "paper":         1.00,   # 同行评审期刊
+    "report":        0.92,   # 机构研报（NBER / Econstor 等）
+    "working_paper": 0.88,   # SSRN 工作论文
+    "preprint":      0.72,
+    "thesis":        0.60,
+    "book":          0.50,
+}
 # 时间项半衰期：3 年前的论文时间得分 0.5，而非线性归一化的近 0
 _RECENCY_HALFLIFE_DAYS = 365 * 3
 # 语义得分低于此值直接淘汰。原 5 太松，放进了大量边缘论文
@@ -116,9 +135,12 @@ class PaperSearchAgent:
     ARXIV_API  = "https://export.arxiv.org/api/query"
     CATEGORIES = ["q-fin.PM", "q-fin.TR", "q-fin.ST", "q-fin.MF"]
 
-    def __init__(self, llm: LLMClient, local_library_dir: str = None):
+    def __init__(self, llm: LLMClient, local_library_dir: str = None,
+                 enabled_sources=None):
         self.llm = llm
         self.local_library_dir = local_library_dir
+        self.enabled_sources = enabled_sources      # None = 全部默认源
+        self.intent = None                          # Step 1 的产物，由编排器注入
         self._kw_cache:      Dict[str, dict]       = {}   # idea → {title_terms}
         self._results_cache: Dict[str, List[Dict]] = {}   # idea → 已过滤+排序的论文列表
 
@@ -154,19 +176,27 @@ class PaperSearchAgent:
     def _fetch_and_rank(self, idea: str) -> List[Dict]:
         """
         完整流程：
-          arXiv 宽召回 → LLM 语义打分 → 过滤低分 → 日期+相关性综合排序
-        """
-        kw = self._get_keywords(idea)
-        query = self._build_query(kw)
+          多源并联召回 → 跨源去重 → LLM 语义打分 → 过滤低分 → 综合排序
 
-        print(f"[PaperSearch] arXiv 查询: {query[:120]}")
-        papers, arxiv_total = self._fetch_arxiv(query, start=0,
-                                                page_size=_PREFETCH,
-                                                sort_by="relevance")
+        意图（Step 1）若已由调用方提供则直接复用，否则就地识别一次。
+        """
+        from ..sources import build_sources, dedupe
+
+        intent = self.intent or self._recognize(idea)
+
+        papers: List[Dict] = []
+        for src in build_sources(self.enabled_sources):
+            got = src._safe_search(intent, _PER_SOURCE)
+            if got:
+                print(f"[PaperSearch] {src.name}: {len(got)} 条")
+            papers.extend(got)
+
         if not papers:
             return []
 
-        print(f"[PaperSearch] arXiv 命中 {arxiv_total} 篇，取前 {len(papers)} 篇")
+        before = len(papers)
+        papers = dedupe(papers)
+        print(f"[PaperSearch] 多源合计 {before} 条 → 去重后 {len(papers)} 条")
 
         # LLM 语义打分（传入标题+摘要段落）
         # 只对 relevance 靠前的 _SCORE_LIMIT 篇打分，其余直接丢弃 —— 见该常量注释
@@ -220,7 +250,17 @@ class PaperSearchAgent:
                 recency = 0.5 ** (age_sec / half_life_sec)
             else:
                 recency = 0.3          # 无日期：轻微惩罚，不至于排到最后
-            combined = ((1.0 - _RECENCY_W) * rel_norm) + (_RECENCY_W * recency)
+
+            # 文献类型权重：同等相关度下，经同行评审的期刊论文比预印本更可信，
+            # 而 SSRN 工作论文与机构研报对「能不能落地」这类问题信息量更高。
+            # 缺省按 paper 处理：未标类型不等于低质量，取 0.5 会无故惩罚
+            dw = _DOC_WEIGHT.get(p.get("doc_type") or "paper", 1.00)
+            # 引用量做 log 压缩，避免老论文仅靠年头久而垄断前排
+            cites = max(0, int(p.get("citations") or 0))
+            cw = min(1.0, math.log1p(cites) / math.log1p(200))
+
+            combined = (_REL_W * rel_norm + _RECENCY_W * recency
+                        + _DOCTYPE_W * dw + _CITE_W * cw)
             p = dict(p)
             p["_relevance_score"] = s
             p["_recency"] = round(recency, 4)
@@ -231,6 +271,11 @@ class PaperSearchAgent:
         ranked.sort(key=lambda x: (x["_combined_score"], x["_relevance_score"]),
                     reverse=True)
         return ranked
+
+    def _recognize(self, idea: str):
+        """调用方没给意图时就地识别一次（CLI 路径会走到这里）。"""
+        from .intent_agent import IntentAgent
+        return IntentAgent(self.llm).recognize(idea)
 
     # ── 关键词提取 & 查询构造 ─────────────────────────────────────────────────
 

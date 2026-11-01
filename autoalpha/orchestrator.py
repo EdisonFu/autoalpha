@@ -31,6 +31,7 @@ from .agents.factor_extract_agent import FactorExtractAgent
 from .agents.factor_implement_agent import FactorImplementAgent, classify_error
 from .agents.factor_extension_agent import FactorExtensionAgent
 from .agents.translate_agent import TranslateAgent
+from .agents.intent_agent import IntentAgent
 
 DEFAULT_KLINES = "/Users/fuzhendong/GolandProjects/quant/factor-signal/data/klines"
 MAX_IMPLEMENT_RETRIES = 2
@@ -53,6 +54,7 @@ class FlowOrchestrator:
             self.llm, output_dir=os.path.join(output_dir, "factors"))
         self.extension = FactorExtensionAgent(self.llm)
         self.translate = TranslateAgent(self.llm)
+        self.intent_agent = IntentAgent(self.llm)
 
         self.universe_preset = universe_preset
         self._engine: Optional[SplitEngine] = None
@@ -62,10 +64,51 @@ class FlowOrchestrator:
 
     # ── 阶段 1：论文检索 ────────────────────────────────────────────────────
 
+    # ── Step 1：意图识别 ───────────────────────────────────────────────────
+
+    def recognize_intent(self, sess: FlowSession, idea: str,
+                         override: Optional[dict] = None
+                         ) -> Iterator[FlowEvent]:
+        """
+        把用户输入归一成结构化检索意图。实测同一意图不同表述的召回量
+        相差 800 倍（"ETF轮动" 18 篇 vs 规范英文表述 14,494 篇），
+        这一步就是填这个落差，并决定去哪些源找。
+        """
+        sess.idea = idea
+        yield sess.record(FlowEvent(EventKind.STAGE_START, Stage.INTENT,
+                                    "识别研究意图"))
+        intent = self.intent_agent.recognize(idea)
+
+        # 用户在界面上改过意图就以用户的为准
+        if override:
+            for k, v in override.items():
+                if hasattr(intent, k) and v not in (None, "", []):
+                    setattr(intent, k, v)
+
+        sess.intent = intent
+        self.paper_search.intent = intent
+
+        yield sess.record(FlowEvent(
+            EventKind.DATA, Stage.INTENT,
+            intent.restated_zh or intent.canonical_en,
+            {"intent": intent.to_dict()}))
+
+        if intent.confidence < 0.5:
+            yield sess.record(FlowEvent(
+                EventKind.LOG, Stage.INTENT,
+                f"意图置信度较低（{intent.confidence:.2f}），"
+                f"建议确认或补充研究方向后再检索"))
+
+        yield sess.record(FlowEvent(EventKind.STAGE_END, Stage.INTENT, "意图识别完成"))
+
+    # ── Step 2：多源资料检索 ───────────────────────────────────────────────
+
     def search_papers(self, sess: FlowSession, idea: str,
                       max_results: int = 10, page: int = 1
                       ) -> Iterator[FlowEvent]:
         sess.idea = idea
+        if sess.intent is not None:
+            self.paper_search.intent = sess.intent
         more = page > 1
         yield sess.record(FlowEvent(
             EventKind.STAGE_START, Stage.SEARCH,
@@ -124,6 +167,11 @@ class FlowOrchestrator:
              "papers": [{"idx": base + i, "title": p.get("title", ""),
                          "url": p.get("pdf_url", ""), "date": p.get("date", ""),
                          "abstract": (p.get("abstract") or "")[:400],
+                         "source": p.get("source", ""),
+                         "venue": p.get("venue", ""),
+                         "doc_type": p.get("doc_type", "paper"),
+                         "citations": p.get("citations", 0),
+                         "also_in": p.get("also_in", []),
                          "zh_summary": (zh[i].get("summary", "") if i < len(zh) else ""),
                          "zh_relevance": (zh[i].get("relevance", "") if i < len(zh) else "")}
                         for i, p in enumerate(papers)]}))
@@ -407,6 +455,7 @@ class FlowOrchestrator:
                 auto_select: int = 1) -> Iterator[FlowEvent]:
         """不中断地跑完整条链（CLI 用）。Web 端用分阶段接口。"""
         try:
+            yield from self.recognize_intent(sess, idea)
             yield from self.search_papers(sess, idea)
             yield from self.prepare_data(sess)
             if sess.error:

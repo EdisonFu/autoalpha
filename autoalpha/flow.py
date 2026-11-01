@@ -24,7 +24,8 @@ import pandas as pd
 
 class Stage(str, Enum):
     INIT      = "init"
-    SEARCH    = "search"        # 论文检索
+    INTENT    = "intent"        # 意图识别：把用户输入归一成结构化检索意图
+    SEARCH    = "search"        # 多源资料检索
     SELECT    = "select"        # 等待用户选论文（可中断点）
     EXTRACT   = "extract"       # 提取因子假设
     DATA      = "data"          # 加载数据 + 建切分
@@ -79,6 +80,7 @@ class FlowSession:
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     idea: str = ""
     stage: Stage = Stage.INIT
+    intent: Optional[Any] = None       # SearchIntent
     papers: List[Dict] = field(default_factory=list)
     paper_page: int = 1
     paper_total: int = 0

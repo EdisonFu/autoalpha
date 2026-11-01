@@ -44,6 +44,12 @@ def get_orch() -> FlowOrchestrator:
 class StartReq(BaseModel):
     idea: str
     mode: str = "stepwise"       # stepwise | auto
+    sources: Optional[List[str]] = None     # 启用的检索源，None = 全部
+
+
+class IntentReq(BaseModel):
+    session_id: str
+    intent: dict = {}            # 用户在界面上修正后的意图
 
 
 class SelectReq(BaseModel):
@@ -98,14 +104,17 @@ def start(req: StartReq):
     _sessions[sess.session_id] = sess
     orch = get_orch()
 
+    if req.sources:
+        orch.paper_search.enabled_sources = tuple(req.sources)
+
     if req.mode == "auto":
         _spawn(sess.session_id, lambda: orch.run_all(sess, req.idea))
     else:
+        # 分步模式下 Step 1 结束即暂停，让用户确认/修正意图再检索
         def _gen():
-            yield from orch.search_papers(sess, req.idea)
-            yield from orch.prepare_data(sess)
-            yield FlowEvent(EventKind.AWAIT_INPUT, Stage.SELECT,
-                            "请选择要研究的论文", {"next": "select"})
+            yield from orch.recognize_intent(sess, req.idea)
+            yield FlowEvent(EventKind.AWAIT_INPUT, Stage.INTENT,
+                            "确认研究意图后开始检索", {"next": "search"})
         _spawn(sess.session_id, _gen)
 
     return {"session_id": sess.session_id, "mode": req.mode}
@@ -126,6 +135,31 @@ def select(req: SelectReq):
 
     _spawn(req.session_id, _gen)
     return {"ok": True, "n_selected": len(picked)}
+
+
+@app.post("/api/search")
+def search(req: IntentReq):
+    """Step 2：按（可能被用户修正过的）意图开始多源检索。"""
+    sess = _sessions.get(req.session_id)
+    if not sess:
+        raise HTTPException(404, "session not found")
+    orch = get_orch()
+
+    if req.intent and sess.intent is not None:
+        for k, v in req.intent.items():
+            if hasattr(sess.intent, k) and v not in (None, "", []):
+                setattr(sess.intent, k, v)
+        orch.paper_search.intent = sess.intent
+        orch.paper_search._results_cache.pop(sess.idea, None)   # 意图变了要重查
+
+    def _gen():
+        yield from orch.search_papers(sess, sess.idea)
+        yield from orch.prepare_data(sess)
+        yield FlowEvent(EventKind.AWAIT_INPUT, Stage.SELECT,
+                        "请选择要研究的论文", {"next": "select"})
+
+    _spawn(req.session_id, _gen)
+    return {"ok": True}
 
 
 @app.post("/api/more_papers")

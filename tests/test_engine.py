@@ -319,7 +319,38 @@ def test_recency_does_not_outrank_relevance():
         [{"title": t, "date": d} for t, _, d in rows],
         [s for _, s, _ in rows])
     assert out[0]["_relevance_score"] == 8, "相关性更高的论文应排前"
-    assert "ChatGPT" in out[-1]["title"], "rel=7 的论文应排最后"
+    # 核心契约：更新但相关性更低的论文不得排到第一。
+    # （不再断言它垫底 —— 排序现在还计入引用量与文献类型，
+    #   名次可能被其它维度带动，只要没压过相关性就是对的。）
+    assert "ChatGPT" not in out[0]["title"], "rel=7 的论文不得夺冠"
+
+
+def test_doc_type_and_citations_affect_ranking():
+    """同等相关度下，期刊论文/研报应优于预印本；引用量为次要加权。"""
+    from autoalpha.agents.paper_search_agent import PaperSearchAgent
+    rows = [
+        ("journal", 8, "2020-01-01", "paper", 100),
+        ("preprint", 8, "2020-01-01", "preprint", 100),
+        ("ssrn", 8, "2020-01-01", "working_paper", 100),
+    ]
+    out = PaperSearchAgent._combined_sort(
+        [{"title": t, "date": d, "doc_type": dt, "citations": c}
+         for t, _, d, dt, c in rows],
+        [s for _, s, _, _, _ in rows])
+    titles = [p["title"] for p in out]
+    assert titles.index("journal") < titles.index("preprint")
+    assert titles.index("ssrn") < titles.index("preprint")
+
+
+def test_missing_doc_type_is_not_penalised():
+    """未标类型的条目不应因此被降权（缺省按 paper 处理）。"""
+    from autoalpha.agents.paper_search_agent import PaperSearchAgent
+    a = PaperSearchAgent._combined_sort(
+        [{"title": "x", "date": "2020-01-01"}], [8])[0]["_combined_score"]
+    b = PaperSearchAgent._combined_sort(
+        [{"title": "x", "date": "2020-01-01", "doc_type": "paper"}],
+        [8])[0]["_combined_score"]
+    assert a == b
 
 
 def test_turnover_cap_scales_with_rebalance_frequency():

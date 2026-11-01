@@ -90,6 +90,21 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   background:rgba(79,140,255,.07);border-left:2px solid var(--acc);border-radius:0 6px 6px 0}
 .zh.rel{background:rgba(124,92,255,.07);border-left-color:var(--acc2);margin-top:5px}
 .zh b{color:var(--acc);font-weight:600;margin-right:6px;font-size:11px}
+.srcline{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.badge2{font-size:10px;padding:2px 7px;border-radius:4px;background:#0d1320;
+  border:1px solid var(--line);color:var(--fg2);font-family:var(--mono)}
+.badge2.src{color:var(--acc2);border-color:rgba(124,92,255,.35)}
+.badge2.dt-report{color:var(--warn);border-color:rgba(245,158,11,.4)}
+.badge2.dt-working_paper{color:var(--ok);border-color:rgba(34,197,94,.35)}
+.badge2.dt-paper{color:var(--acc);border-color:rgba(79,140,255,.35)}
+.tagchip{font-size:11px;padding:3px 9px;border-radius:12px;background:#0d1320;
+  border:1px solid var(--line);color:var(--fg2)}
+.tagchip b{color:var(--fg);margin-left:3px}
+.kvlabel{font-size:10.5px;color:var(--fg2);text-transform:uppercase;letter-spacing:.5px}
+.srcbox{font-size:11.5px;color:var(--fg2);display:inline-flex;align-items:center;
+  gap:5px;padding:5px 10px;background:#0d1320;border:1px solid var(--line);
+  border-radius:7px;cursor:pointer}
+.srcbox input{accent-color:var(--acc)}
 .zh.rel b{color:var(--acc2)}
 .usage{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--fg2);
   font-family:var(--mono);margin-top:10px;padding:9px 11px;background:#0d1320;
@@ -187,11 +202,12 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 </div>
 
 <script>
-const STEPS=[['search','论文检索'],['data','数据切分'],['extract','因子假设'],
-             ['implement','代码实现'],['evaluate','双层回测'],['done','完成']];
+const STEPS=[['intent','意图识别'],['search','资料检索'],['data','数据切分'],
+             ['extract','因子假设'],['implement','代码实现'],['evaluate','双层回测'],
+             ['done','完成']];
 const EXAMPLES=['基于动量的ETF轮动因子','波动率择时信号','量价背离反转因子','跨资产动量溢出'];
 let SID=null, ES=null, papers=[], specs=[], selP=new Set(), selS=new Set(), evals=[];
-let paperMore=false, paperPage=1, paperTotal=0;
+let paperMore=false, paperPage=1, paperTotal=0, INTENT=null;
 let stageState={};
 
 const $=id=>document.getElementById(id);
@@ -263,10 +279,12 @@ function handle(ev){
   else if(kind==='error'){log('✗ '+message,'err');$('btnStep').disabled=$('btnAuto').disabled=false}
   else if(kind==='await_input'){
     log('⏸ '+message);
+    if(payload.next==='search')showIntent(true);
     if(payload.next==='select')showPapers();
     if(payload.next==='run')showSpecs();
   }
   else if(kind==='data'){
+    if(payload.intent){INTENT=payload.intent; showIntent();}
     if(payload.papers){
       if(payload.page&&payload.page>1){
         const seen=new Set(papers.map(p=>p.idx));
@@ -319,6 +337,49 @@ function showData(p){
   IC 门槛由截面宽度推导（<code>t/√n/√width</code>），不是硬编码常量。</div>`);
 }
 
+function showIntent(editable){
+  if(!INTENT)return;
+  const i=INTENT, conf=(i.confidence*100).toFixed(0);
+  const warn=i.confidence<0.5
+    ? `<div class="note" style="border-left-color:var(--warn)">
+       置信度偏低（${conf}%），建议补充研究方向，或直接修改下面的检索式。</div>` : '';
+  const chips=[['资产',i.asset_class],['因子族',i.factor_family],
+               ['周期',i.horizon],['文献偏好',i.doc_preference]]
+    .filter(x=>x[1]&&x[1]!=='unknown')
+    .map(x=>`<span class="tagchip">${x[0]} <b>${esc(x[1])}</b></span>`).join('');
+  panel('pIntent',`<h3>Step 1 · 研究意图 <span class="badge">置信度 ${conf}%</span></h3>
+    ${i.restated_zh?`<div class="zh"><b>理解为</b>${esc(i.restated_zh)}</div>`:''}
+    <div style="margin-top:10px">
+      <div class="kvlabel">检索式（可改）</div>
+      <input id="canonEn" type="text" value="${esc(i.canonical_en)}"
+             style="width:100%;margin-top:5px">
+    </div>
+    ${i.aliases&&i.aliases.length?`<div style="margin-top:9px">
+      <div class="kvlabel">同义表述（一并检索）</div>
+      <div class="chips" style="margin-top:5px">${
+        i.aliases.map(a=>`<span class="tagchip">${esc(a)}</span>`).join('')}</div></div>`:''}
+    <div class="chips" style="margin-top:10px">${chips}</div>
+    ${warn}
+    ${editable?`<div style="margin-top:12px">
+      <div class="kvlabel">检索源</div>
+      <div class="chips" style="margin-top:6px">
+        ${['arxiv','openalex','crossref'].map(sname=>
+          `<label class="srcbox"><input type="checkbox" class="srcck" value="${sname}" checked>
+           ${({arxiv:'arXiv 预印本',openalex:'OpenAlex 期刊+研报',crossref:'Crossref 期刊+SSRN'})[sname]}</label>`
+        ).join('')}
+      </div></div>
+      <div class="actions"><button onclick="startSearch()">开始检索</button></div>`:''}`);
+}
+
+async function startSearch(){
+  const el=$('canonEn');
+  const patch=el?{canonical_en:el.value.trim()}:{};
+  const srcs=[...document.querySelectorAll?.('.srcck')||[]];
+  log('开始多源检索：'+(patch.canonical_en||''));
+  await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({session_id:SID,intent:patch})});
+}
+
 function showPapers(){
   if(!papers.length){
     panel('pPapers',`<h3>论文检索</h3><div class="empty">未找到相关论文，将直接基于研究方向生成假设</div>
@@ -341,11 +402,24 @@ function drawPapers(){
       <div class="box">${selP.has(p.idx)?'✓':''}</div>
       <div class="bd"><div class="ti">${esc(p.title)}</div>
       <div class="me">${esc(p.date||'')} ${p.url?'· <code>'+esc(p.url)+'</code>':''}</div>
+      <div class="srcline">${srcBadge(p)}</div>
       ${p.zh_summary?`<div class="zh"><b>概述</b>${esc(p.zh_summary)}</div>`:''}
       ${p.zh_relevance?`<div class="zh rel"><b>相关性</b>${esc(p.zh_relevance)}</div>`:''}
       ${p.abstract?`<div class="ab">${esc(p.abstract)}</div>`:''}</div></div>`).join('');
 }
 function togP(i){selP.has(i)?selP.delete(i):selP.add(i);drawPapers()}
+
+const DOC_LABEL={paper:'期刊论文',report:'研报',working_paper:'SSRN工作论文',
+                 preprint:'预印本',thesis:'学位论文',book:'书籍章节'};
+function srcBadge(p){
+  const out=[];
+  if(p.doc_type)out.push(`<span class="badge2 dt-${p.doc_type}">${DOC_LABEL[p.doc_type]||p.doc_type}</span>`);
+  if(p.venue)out.push(`<span class="badge2">${esc(p.venue.slice(0,30))}</span>`);
+  if(p.citations>0)out.push(`<span class="badge2">被引 ${p.citations}</span>`);
+  const srcs=[p.source,...(p.also_in||[])].filter(Boolean);
+  if(srcs.length)out.push(`<span class="badge2 src">${srcs.join(' + ')}</span>`);
+  return out.join('');
+}
 
 async function morePapers(){
   log('加载第 '+(paperPage+1)+' 批论文');
