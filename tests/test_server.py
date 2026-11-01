@@ -184,3 +184,37 @@ def test_llm_config_requires_model():
     from fastapi.testclient import TestClient
     c = TestClient(server.app)
     assert c.post("/api/llm/config", json={"model": ""}).status_code == 422
+
+
+def test_demo_mode_needs_no_api_key():
+    """
+    演示模式的意义是让人无需密钥即可看懂项目。
+    接口必须自包含，不触发任何 LLM 调用。
+    """
+    from fastapi.testclient import TestClient
+    c = TestClient(server.app)
+    r = c.get("/api/demo")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["papers"] and d["specs"] and d["evals"]
+    assert "演示" in d["banner"], "必须标明是演示数据，不可被误当成真实结论"
+
+
+def test_demo_includes_the_motivating_counterexample():
+    """
+    演示里必须包含「IC 为正但最高分位最差」的因子 ——
+    它是本项目把重心放在评估而非生成的理由，不能只展示成功案例。
+    """
+    from fastapi.testclient import TestClient
+    c = TestClient(server.app)
+    evals = c.get("/api/demo").json()["evals"]
+
+    assert any(e["status"] == "PASS" for e in evals)
+    assert any(e["status"].startswith("FAIL") for e in evals), "不能只有成功案例"
+
+    bad = [e for e in evals if e["is_layers"]
+           and e["is_layers"]["layer_ann_returns"][-1]
+           < max(e["is_layers"]["layer_ann_returns"])]
+    assert bad, "应包含最高分位非最优的反例"
+    tricky = [e for e in bad if e["is_ic"]["ic_tstat"] > 1.96]
+    assert tricky, "反例应当 IC 显著——否则体现不出只看 IC 会被骗"

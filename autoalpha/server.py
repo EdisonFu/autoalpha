@@ -518,10 +518,25 @@ def library():
         return {"factors": [], "error": str(e)}
 
 
+@app.get("/api/demo")
+def demo_payload():
+    """
+    演示模式数据。让人无需 API Key 与行情数据即可走通全流程，
+    看懂这个项目在做什么 —— 包括那个「IC 为正但最高分位最差」的因子，
+    它正是本项目重心放在评估而非生成的理由。
+    """
+    from .demo import (DEMO_INTENT, DEMO_PAPERS, DEMO_SPECS, DEMO_DATA,
+                       DEMO_EVALS, DEMO_USAGE, DEMO_BANNER)
+    return {"banner": DEMO_BANNER, "intent": DEMO_INTENT,
+            "papers": DEMO_PAPERS, "specs": DEMO_SPECS, "data": DEMO_DATA,
+            "evals": DEMO_EVALS, "usage": DEMO_USAGE}
+
+
 @app.get("/api/health")
 def health():
     import os as _os
     return {"ok": True,
+            "demo": _os.environ.get("AUTOALPHA_DEMO") == "1",
             "has_api_key": any(_os.environ.get(k) for k in
                                ("LLM_API_KEY", "ANTHROPIC_API_KEY",
                                 "DEEPSEEK_API_KEY", "OPENAI_API_KEY"))}

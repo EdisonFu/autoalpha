@@ -198,6 +198,8 @@ def _serve_web(argv):
         if a == "--host" and i + 1 < len(argv):
             host = argv[i + 1]
     import os
+    if "--demo" in argv:
+        os.environ["AUTOALPHA_DEMO"] = "1"
     from autoalpha.server import serve
     key = any(os.environ.get(k) for k in
               ("LLM_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY",
@@ -206,8 +208,12 @@ def _serve_web(argv):
     print("\n" + "=" * 54, flush=True)
     print(f"  AutoAlpha Web  →  http://{host}:{port}", flush=True)
     print("=" * 54, flush=True)
-    print(f"  LLM API Key : {'已配置' if key else '未配置 ⚠ 请设置 LLM_API_KEY'}",
-          flush=True)
+    if os.environ.get("AUTOALPHA_DEMO") == "1":
+        print("  模式         : 演示（预置样例，无需 API Key 与行情数据）",
+              flush=True)
+    else:
+        print(f"  LLM API Key : {'已配置' if key else '未配置 ⚠ 请设置 LLM_API_KEY'}",
+              flush=True)
     print(f"  数据目录     : {klines or '(默认) factor-signal/data/klines'}", flush=True)
     print("  停止服务     : Ctrl+C\n", flush=True)
     serve(host=host, port=port)

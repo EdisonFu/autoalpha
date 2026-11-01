@@ -1,26 +1,84 @@
-# AutoAlpha — 多Agent量化因子挖掘流水线
+# AutoAlpha
+
+**自动化量化研究智能体 —— 从一句研究方向，到一个经得起检验的因子。**
 
 [![tests](https://github.com/EdisonFu/autoalpha/actions/workflows/tests.yml/badge.svg)](https://github.com/EdisonFu/autoalpha/actions/workflows/tests.yml)
 [![lint](https://github.com/EdisonFu/autoalpha/actions/workflows/lint.yml/badge.svg)](https://github.com/EdisonFu/autoalpha/actions/workflows/lint.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-> 输入一个研究方向，自动检索文献与研报、提取因子假设、生成代码并做 IS/OOS 双层回测，输出可信的因子库。
+[English](README.en.md) · 简体中文
 
-**和同类项目的区别：多数 LLM 挖因子方案止步于 IC/ICIR，这个项目补了回测层。**
+输入「A股ETF截面动量轮动」，系统自主完成一轮完整的量化研究：
 
-差别有多大？看一个真实的例子 —— 某动量因子 IC 为正、月度胜率 66%，
-按 IC/ICIR 判定「有效」，但它的分层年化收益是：
+```
+意图识别 → 多源检索 → 数据准备 → 因子假设 → 代码生成 → 因子评估 → 延伸探索
+   ↓          ↓          ↓          ↓          ↓          ↓          ↓
+ 术语归一   三源并联   截面构建   可计算性   沙箱执行   IS/OOS    变体搜索
+           +跨源去重   +门槛推导   前置校验   +自修复    双层门控
+```
+
+这不是「让 LLM 写个因子公式」。每个环节都是一个**带约束、会自检、失败可恢复**
+的智能体：检索要判断相关性，提取要先知道有什么数据，代码要在沙箱里跑通并通过
+形状校验，评估要扛得住样本外。
+
+---
+
+## 为什么需要它
+
+LLM 生成因子很容易 —— 难的是**判断哪个因子值得信**。
+
+这是一个真实跑出来的例子。某动量因子 IC 为正、月度胜率 66%，
+按常见的 IC/ICIR 门控会判定「有效」并入库。但它的分层年化收益是：
 
 ```
 Q1 +5.4%   Q2 +2.6%   Q3 -2.3%   Q4 +7.5%   Q5 -6.3%
                                             ↑ 最高分位反而最差
 ```
 
-收益堆在中间层，多空组合恰好错过赚钱的层。**IC 显著 ≠ 能赚钱。**
-只看 IC/ICIR 的系统会把这类因子放进因子库。
+收益堆在中间层，多空组合恰好错过赚钱的层。**IC 显著 ≠ 能赚钱** ——
+IC 是秩相关，不含收益幅度信息，与分层收益脱节是已知现象。
 
-> ⚠️ 本项目是研究工具，不构成投资建议。通过门控 ≠ 可用于实盘。
+2026 年下半年的文献集体转向了这个问题。[2608.27734] 用两个前沿模型、
+100 个候选 × 5 次重复实测后写道：*"honest evaluation certifies passive
+benchmarks, **rejects every LLM-discovered strategy**"*。
+
+**所以本项目的重心不在生成，在评估。** 多数同类方案止步于 IC/ICIR，
+这里补了完整的回测层与双层门控：
+
+| | 多数 LLM 挖因子项目 | AutoAlpha |
+|---|---|---|
+| 评估口径 | IC / ICIR | + 分层单调性、多空 Sharpe、换手、扣费后收益 |
+| 样本外 | 常缺失 | IS/OOS 切分由引擎持有，搜索阶段**无法访问** OOS |
+| 门槛 | 硬编码常量 | 由截面宽度推导（换数据集自动适配） |
+| 去重 | IC 序列相关 | 组合净值相关（实测前者漏判同族因子） |
+| 数据约束 | 无 | 提取阶段注入可用数据，禁止编造代理变量 |
+
+---
+
+## 技术要点
+
+**检索不是关键词匹配。** 同一意图不同表述召回量差 800 倍
+（`ETF轮动` 18 篇 vs 规范英文表述 14,494 篇），所以先做意图归一，
+再三源并联（arXiv 预印本 + OpenAlex 研报 + Crossref/SSRN 工作论文）、跨源去重。
+
+**代码生成带自修复回路。** LLM 产出的代码在 subprocess 沙箱执行，
+失败按类型分流（语法/运行时/数据/超时），把定向修复建议回传重试。
+还有两道形状校验拦在回测前：日期稀疏、截面退化 —— 这类因子代码能跑、
+CSV 正常，但 IC 恒为 0。
+
+**防泄漏是结构性的，不靠约定。** 切分由 `SplitEngine` 持有，
+修复回路与经验记忆只能看 IS，OOS 每因子只读一次。
+统计修正抓不住前瞻偏差 —— 实测一个故意泄漏的 oracle 打出 Sharpe 35，
+**完整通过了** Deflated Sharpe 与 PBO 检验。
+
+**成本可控。** 单次完整运行约 $0.15–0.22（[实测分解](docs/TOKEN_COST.md)）。
+论文打分曾占 84.5% 成本，加截断后降 52%，召回无感。
+
+---
+
+> ⚠️ **免责声明**：本项目是研究工具，不构成投资建议。
+> **通过门控 ≠ 可用于实盘** —— 门控只排除明显不可信的结果，不能证明因子会盈利。
 > 详见 [DISCLAIMER.md](DISCLAIMER.md)。
 
 ---
@@ -190,6 +248,18 @@ RSS 不支持按词检索，所以是「先抓取入库、再本地筛选」，
 ---
 
 ## 快速开始
+
+### 先看效果（无需 API Key）
+
+```bash
+git clone https://github.com/EdisonFu/autoalpha.git
+cd autoalpha
+pip install -e .
+python main.py --web --demo
+```
+
+打开 http://127.0.0.1:8000 点「播放演示」，会用预置样例重放一轮完整流程 ——
+包括上面那个 IC 为正但最高分位最差的因子。不发起任何外部调用，数据标明为演示用。
 
 ### 1. 安装
 
