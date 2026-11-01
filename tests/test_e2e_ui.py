@@ -188,3 +188,54 @@ def test_no_horizontal_overflow(page):
     over = page.evaluate(
         "() => document.documentElement.scrollWidth > window.innerWidth + 1")
     assert not over, "窄屏出现横向溢出"
+
+
+# ── 阶段门控（用户报的问题）────────────────────────────────────────────
+
+def test_buttons_gated_by_phase(page):
+    """
+    进入某阶段后，上游阶段的按钮必须置灰。
+    用户报：因子假设已出来，"开始检索"仍可点。
+    """
+    page.evaluate("""() => {
+        // 直接驱动事件，不依赖真实 LLM
+        handle({kind:'await_input',stage:'intent',message:'',payload:{next:'search'}});
+        INTENT={canonical_en:'x',aliases:[],asset_class:'etf',factor_family:'momentum',
+                horizon:'daily',doc_preference:'both',restated_zh:'测试',confidence:0.8};
+        showIntent(true);
+    }""")
+    page.wait_for_timeout(150)
+    assert page.is_enabled("[data-act=search]"), "意图确认后应可检索"
+
+    page.evaluate("""() => {
+        handle({kind:'data',stage:'search',message:'',payload:{page:1,total:2,has_more:false,
+          papers:[{idx:0,title:'P1'},{idx:1,title:'P2'}]}});
+        handle({kind:'await_input',stage:'select',message:'',payload:{next:'select'}});
+    }""")
+    page.wait_for_timeout(150)
+    assert page.is_enabled("[data-act=select]"), "检索完成后应可提取"
+
+    page.evaluate("""() => {
+        handle({kind:'data',stage:'extract',message:'',payload:{append:false,
+          specs:[{idx:0,factor_name:'f1',zh_what:'测试因子'}]}});
+        handle({kind:'await_input',stage:'implement',message:'',payload:{next:'run'}});
+    }""")
+    page.wait_for_timeout(200)
+
+    assert page.is_disabled("[data-act=search]"), "有假设后「开始检索」必须置灰"
+    assert page.is_disabled("[data-act=select]"), "有假设后「选论文」必须置灰"
+    assert page.is_enabled("[data-act=run]"), "有假设后「实现并回测」应可用"
+
+    title = page.get_attribute("[data-act=search]", "title")
+    assert title, "置灰的按钮要说明原因"
+
+
+def test_progress_bar_advances(page):
+    page.evaluate("""() => {
+        handle({kind:'stage_start',stage:'intent',message:'',payload:{}});
+        handle({kind:'stage_end',stage:'intent',message:'',payload:{}});
+    }""")
+    page.wait_for_timeout(150)
+    w = page.evaluate(
+        "() => document.querySelector('.progress .bar').style.width")
+    assert w and w != "0%", f"进度条未推进: {w}"

@@ -44,17 +44,26 @@ def _state(base, sid, timeout=20):
         return json.load(r)
 
 
-def _advance(base, sid, path, payload, done, timeout=600, label=""):
-    """发请求（409 则重试），然后等 done(state) 为真。"""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+def _advance(base, sid, path, payload, done, timeout=600, label="",
+             accept_timeout=180):
+    """
+    发请求（409 则重试），然后等 done(state) 为真。
+
+    两段各有独立预算：曾让它们共享一个 deadline，结果等待请求被接受
+    就把全部时间耗掉，第二段还没开始就报「等待结果超时」——
+    而服务端其实已经完成了该阶段。
+    """
+    accept_until = time.time() + accept_timeout
+    while time.time() < accept_until:
         code, _ = _post(base, path, {"session_id": sid, **payload})
         if code == 200:
             break
         time.sleep(2)
     else:
-        raise TimeoutError(f"{label}: 请求始终未被接受")
+        raise TimeoutError(f"{label}: 请求始终未被接受（上一阶段未结束？）")
 
+    # 请求已被接受，此刻才开始计结果等待时间
+    deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             d = _state(base, sid)
@@ -63,7 +72,7 @@ def _advance(base, sid, path, payload, done, timeout=600, label=""):
         except Exception:
             pass
         time.sleep(2)
-    raise TimeoutError(f"{label}: 等待结果超时")
+    raise TimeoutError(f"{label}: 等待结果超时（{timeout}s）")
 
 
 def run_once(port, idea, verbose=True):

@@ -41,7 +41,9 @@ button{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;bord
   padding:13px 22px;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;
   transition:.18s;white-space:nowrap}
 button:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 7px 20px rgba(79,140,255,.34)}
-button:disabled{opacity:.42;cursor:not-allowed}
+button:disabled{opacity:.34;cursor:not-allowed;transform:none!important;
+  box-shadow:none!important;filter:grayscale(.6)}
+button:disabled:hover{transform:none}
 button.ghost{background:transparent;border:1px solid var(--line);color:var(--fg2)}
 button.ghost:hover:not(:disabled){border-color:var(--acc);color:var(--fg);box-shadow:none}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
@@ -50,7 +52,21 @@ button.ghost:hover:not(:disabled){border-color:var(--acc);color:var(--fg);box-sh
 .chip:hover{border-color:var(--acc);color:var(--fg)}
 
 /* 阶段条 */
-.steps{display:flex;gap:6px;margin-bottom:22px;overflow-x:auto;padding-bottom:4px}
+.steps{display:flex;gap:6px;margin-bottom:22px;overflow-x:auto;padding-bottom:4px;
+  position:relative;padding-top:10px}
+.progress{position:absolute;top:0;left:0;right:0;height:3px;background:var(--card);
+  border-radius:2px;overflow:hidden}
+.progress .bar{height:100%;border-radius:2px;transition:width .5s cubic-bezier(.4,0,.2,1);
+  background:linear-gradient(90deg,var(--acc),var(--acc2));
+  box-shadow:0 0 12px rgba(79,140,255,.5)}
+.sq{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+  border-radius:4px;background:var(--line);color:var(--fg2);font-size:9px;margin-right:5px;
+  transition:.25s;vertical-align:middle}
+.step.active .sq{background:var(--acc);color:#fff}
+.step.done .sq{background:var(--ok);color:#fff}
+.mini{width:6px;height:6px;border-radius:50%;background:currentColor;
+  animation:blink 1s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
 .step{flex:1;min-width:92px;background:var(--card);border:1px solid var(--line);
   border-radius:10px;padding:11px 12px;transition:.25s;position:relative;overflow:hidden}
 .step .n{font-size:10px;color:var(--fg2);letter-spacing:1.2px;text-transform:uppercase}
@@ -348,6 +364,42 @@ const STEPS=[['intent','意图识别'],['search','资料检索'],['data','数据
 const EXAMPLES=['基于动量的ETF轮动因子','波动率择时信号','量价背离反转因子','跨资产动量溢出'];
 let SID=null, ES=null, papers=[], specs=[], selP=new Set(), selS=new Set(), evals=[];
 let paperMore=false, paperPage=1, paperTotal=0, INTENT=null;
+
+// ── 阶段状态机 ──────────────────────────────────────────────────────────
+// 每个阶段三态：idle(未开始) / busy(进行中) / done(已完成)。
+// 按钮可用性一律由它推导，不再散落在各处手动 disable ——
+// 之前因子假设出来后「开始检索」仍可点，就是没有单一事实来源。
+const PHASES=['intent','search','extract','implement'];
+let PH={intent:'idle',search:'idle',extract:'idle',implement:'idle'};
+let BUSY=false;                    // 任一阶段进行中
+
+function setPhase(name,st){
+  if(PH[name]===st)return;
+  PH[name]=st;
+  BUSY=Object.values(PH).includes('busy');
+  syncButtons();
+}
+
+function phaseDone(n){return PH[n]==='done'}
+
+/** 单一事实来源：所有操作按钮的可用性都在这里决定 */
+function syncButtons(){
+  const set=(sel,on,why)=>document.querySelectorAll(sel).forEach(b=>{
+    b.disabled=!on;
+    if(!on&&why)b.title=why; else b.removeAttribute('title');
+  });
+  // 新会话：任何阶段进行中都不允许重开
+  set('#btnStep,#btnAuto',!BUSY,'流水线进行中');
+  // 检索：意图已确认、且尚未进入提取
+  set('[data-act=search]',!BUSY&&phaseDone('intent')&&!phaseDone('extract'),
+      phaseDone('extract')?'已提取因子假设，如需重新检索请新建会话':'流水线进行中');
+  // 选论文 / 加载下一批：提取开始后就不该再改
+  set('[data-act=select],[data-act=more]',!BUSY&&!phaseDone('extract'),
+      phaseDone('extract')?'因子假设已生成':'流水线进行中');
+  // 实现：有假设且未在跑
+  set('[data-act=run]',!BUSY&&phaseDone('extract'),'流水线进行中');
+  set('[data-act=extend]',!BUSY&&phaseDone('implement'),'需先完成回测');
+}
 let stageState={};
 
 const $=id=>document.getElementById(id);
@@ -360,9 +412,16 @@ $('chips').innerHTML=EXAMPLES.map(e=>`<div class="chip" onclick="$('idea').value
 $('idea').addEventListener('keydown',e=>{if(e.key==='Enter')start('stepwise')});
 
 function renderSteps(){
-  $('steps').innerHTML=STEPS.map(([k,t],i)=>{
+  const done=STEPS.filter(([k])=>stageState[k]==='done').length;
+  const pct=Math.round(done/STEPS.length*100);
+  $('steps').innerHTML=
+    `<div class="progress"><div class="bar" style="width:${pct}%"></div></div>`
+    + STEPS.map(([k,t],i)=>{
     const st=stageState[k]||'';
-    return `<div class="step ${st}"><div class="n">Step ${i+1}</div><div class="t">${t}</div></div>`;
+    const icon=st==='done'?'✓':(st==='active'?'<span class="mini"></span>':i+1);
+    return `<div class="step ${st}">
+      <div class="n"><span class="sq">${icon}</span>Step ${i+1}</div>
+      <div class="t">${t}</div></div>`;
   }).join('');
 }
 renderSteps();
@@ -379,8 +438,10 @@ function log(msg,cls=''){
 async function start(mode){
   const idea=$('idea').value.trim();
   if(!idea){$('idea').focus();return}
-  $('btnStep').disabled=$('btnAuto').disabled=true;
+  syncButtons();
   papers=[];specs=[];evals=[];selP.clear();selS.clear();stageState={};
+  PH={intent:'idle',search:'idle',extract:'idle',implement:'idle'};BUSY=true;
+  paperMore=false;paperPage=1;paperTotal=0;INTENT=null;
   $('panels').innerHTML='';$('logs').innerHTML='';renderSteps();
   log('启动：'+idea);
   try{
@@ -406,20 +467,38 @@ function connect(){
 
 function handle(ev){
   const {kind,stage,message,payload}=ev;
-  if(kind==='stage_start'){stageState[stage]='active';renderSteps();log('▶ '+message)}
+  if(kind==='stage_start'){
+    stageState[stage]='active';
+    if(stage in PH)setPhase(stage,'busy');
+    renderSteps();log('▶ '+message);
+  }
   else if(kind==='stage_end'){
     stageState[stage]='done';
+    if(stage in PH)setPhase(stage,'done');
+    if(stage==='evaluate')setPhase('implement','done');
     if(payload&&payload.usage)showUsage(payload.usage);
-    if(stage==='done'){STEPS.forEach(([k])=>{if(stageState[k]==='active')stageState[k]='done'});
-      $('btnStep').disabled=$('btnAuto').disabled=false}
+    if(stage==='done'){
+      STEPS.forEach(([k])=>{if(stageState[k]==='active')stageState[k]='done'});
+      BUSY=false;Object.keys(PH).forEach(k=>{if(PH[k]==='busy')PH[k]='done'});
+      syncButtons();
+    }
     renderSteps();log('✓ '+message,'ok');
     if(payload&&payload.can_extend)showExtend();
   }
   else if(kind==='progress')log('  '+message);
   else if(kind==='log')log('  '+message);
-  else if(kind==='error'){log('✗ '+message,'err');$('btnStep').disabled=$('btnAuto').disabled=false}
+  else if(kind==='error'){
+    log('✗ '+message,'err');
+    Object.keys(PH).forEach(k=>{if(PH[k]==='busy')PH[k]='idle'});
+    BUSY=false; syncButtons();
+  }
   else if(kind==='await_input'){
     log('⏸ '+message);
+    BUSY=false;
+    if(payload.next==='search')setPhase('intent','done');
+    if(payload.next==='select')setPhase('search','done');
+    if(payload.next==='run')setPhase('extract','done');
+    syncButtons();
     if(payload.next==='search')showIntent(true);
     if(payload.next==='select')showPapers();
     if(payload.next==='run')showSpecs();
@@ -453,6 +532,7 @@ function panel(id,html){
   let el=$(id);
   if(!el){$('panels').insertAdjacentHTML('beforeend',`<div class="card" id="${id}"></div>`);el=$(id)}
   el.innerHTML=html;
+  syncButtons();          // 新插入的按钮要立刻套用当前阶段规则
   return el;
 }
 
@@ -509,7 +589,7 @@ function showIntent(editable){
            ${({arxiv:'arXiv 预印本',openalex:'OpenAlex 期刊+研报',crossref:'Crossref 期刊+SSRN'})[sname]}</label>`
         ).join('')}
       </div></div>
-      <div class="actions"><button onclick="startSearch()">开始检索</button></div>`:''}`);
+      <div class="actions"><button data-act="search" onclick="startSearch()">开始检索</button></div>`:''}`);
 }
 
 async function startSearch(){
@@ -531,9 +611,9 @@ function showPapers(){
   panel('pPapers',`<h3>选择论文 <span class="badge">${badge}</span></h3>
     <div id="pList"></div>
     <div class="actions">
-      <button onclick="submitSel()">提取因子假设</button>
-      ${paperMore?`<button class="ghost" onclick="morePapers()">加载下一批</button>`:''}
-      <button class="ghost" onclick="selP.clear();submitSel()">跳过，用原始想法</button>
+      <button data-act="select" onclick="submitSel()">提取因子假设</button>
+      ${paperMore?`<button data-act="more" class="ghost" onclick="morePapers()">加载下一批</button>`:''}
+      <button data-act="select" class="ghost" onclick="selP.clear();submitSel()">跳过，用原始想法</button>
     </div>`);
   drawPapers();
 }
@@ -580,8 +660,8 @@ function showSpecs(){
   selS=new Set(specs.map(s=>s.idx!==undefined?s.idx:specs.indexOf(s)));
   panel('pSpecs',`<h3>因子假设 <span class="badge">${specs.length} 个</span></h3>
     <div id="sList"></div>
-    <div class="actions"><button onclick="submitRun()">实现并回测</button>
-    <button class="ghost" onclick="backToPapers()">再选论文，追加假设</button>
+    <div class="actions"><button data-act="run" onclick="submitRun()">实现并回测</button>
+    <button data-act="more" class="ghost" onclick="backToPapers()">再选论文，追加假设</button>
     <button class="ghost" onclick="selS.clear();drawSpecs()">全不选</button></div>`);
   drawSpecs();
 }
@@ -619,7 +699,7 @@ function backToPapers(){
 function showExtend(){
   panel('pExt',`<h3>因子延伸</h3>
     <div class="note">已有因子通过双层门控，可基于它们生成结构化延伸变体。</div>
-    <div class="actions"><button onclick="doExtend()">生成延伸假设</button></div>`);
+    <div class="actions"><button data-act="extend" onclick="doExtend()">生成延伸假设</button></div>`);
 }
 async function doExtend(){
   log('生成延伸假设');
