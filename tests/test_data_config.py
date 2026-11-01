@@ -88,3 +88,54 @@ def test_every_provider_declares_required_metadata():
         assert meta["label"] and meta["note"]
         assert isinstance(meta["credentials"], list)
         assert isinstance(meta["free"], bool)
+
+
+# ── 目录布局（不限定目录名，以 CSV 为判据）────────────────────────────────
+
+def test_accepts_flat_csv_directory(tmp_path):
+    """
+    CSV 直接放在目录下也要能读。要求必须叫 etf-daily/ 是不合理约束 ——
+    用户给什么目录就读什么，判据是里面有没有 CSV。
+    """
+    from autoalpha.data_loader import load_klines
+    (tmp_path / "shetf_510300_x.csv").write_text(
+        "trade_date,open,high,low,close,volume\n"
+        "2024-01-02,1.0,1.1,0.9,1.05,100\n"
+        "2024-01-03,1.05,1.2,1.0,1.15,120\n", encoding="utf-8")
+    data = load_klines(str(tmp_path), "etf-daily")
+    assert "510300" in data and len(data["510300"]) == 2
+
+
+def test_accepts_arbitrary_subdirectory_name(tmp_path):
+    sub = tmp_path / "whatever-name"
+    sub.mkdir()
+    (sub / "shetf_510500_y.csv").write_text(
+        "trade_date,open,high,low,close,volume\n"
+        "2024-01-02,2.0,2.1,1.9,2.05,200\n", encoding="utf-8")
+    from autoalpha.data_loader import load_klines
+    data = load_klines(str(tmp_path), "whatever-name")
+    assert "510500" in data
+
+
+def test_directory_without_csv_is_rejected(tmp_path):
+    from autoalpha.data_loader import load_klines
+    (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(FileNotFoundError) as ei:
+        load_klines(str(tmp_path), "etf-daily")
+    assert "CSV" in str(ei.value)
+
+
+def test_find_csv_dirs_reports_layout(tmp_path):
+    (tmp_path / "a.csv").write_text("x", encoding="utf-8")
+    sub = tmp_path / "daily"
+    sub.mkdir()
+    for n in ("b.csv", "c.csv"):
+        (sub / n).write_text("x", encoding="utf-8")
+    from autoalpha.data_loader import find_csv_dirs
+    found = find_csv_dirs(str(tmp_path))
+    assert found["."] == 1 and found["daily"] == 2
+
+
+def test_find_csv_dirs_on_missing_path():
+    from autoalpha.data_loader import find_csv_dirs
+    assert find_csv_dirs("/no/such/path") == {}

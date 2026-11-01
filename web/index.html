@@ -300,8 +300,9 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
       <div class="mrow" style="margin-top:14px">
         <label>本地数据目录</label>
         <input id="dataDir" type="text" placeholder="留空用默认目录" autocomplete="off">
-        <div class="dsnote">需含 <code>etf-daily/</code> 等频率子目录，
-          CSV 列为 trade_date,open,high,low,close,volume</div>
+        <div class="dsnote">放 CSV 行情文件的目录。可直接放在该目录下，
+          也可分在任意名字的子目录里。<br>
+          CSV 需含列：<code>trade_date, open, high, low, close, volume</code></div>
         <div class="actions" style="margin-top:8px">
           <button class="ghost" onclick="saveDir()">保存目录</button></div>
       </div>
@@ -685,7 +686,9 @@ async function saveDir(){
     const j=await r.json();
     if(!r.ok){$('dataMsg').className='cfgmsg err';$('dataMsg').textContent=j.detail||'设置失败';return}
     $('dataMsg').className='cfgmsg ok';
-    $('dataMsg').textContent=`已设置：${j.klines_dir}`+(j.freqs?`（${j.freqs.join(', ')}）`:'');
+    const det=(j.found||[]).map(f=>`${f.dir==='.'?'根目录':f.dir} ${f.files}`).join(' · ');
+    $('dataMsg').textContent=`已设置：${j.klines_dir}`
+      +(j.total_csv?`  共 ${j.total_csv} 个 CSV（${det}）`:'');
     log('数据目录：'+j.klines_dir);
     loadData();
   }catch(e){$('dataMsg').className='cfgmsg err';$('dataMsg').textContent='设置失败：'+e}

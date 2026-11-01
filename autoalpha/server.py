@@ -434,14 +434,20 @@ def data_dir_set(req: KlinesDirReq):
 
     if not os.path.isdir(path):
         raise HTTPException(422, f"目录不存在: {path}")
-    subs = [d for d in os.listdir(path)
-            if os.path.isdir(os.path.join(path, d))]
-    if not subs:
-        raise HTTPException(422, "目录下没有频率子目录（如 etf-daily/）")
+
+    # 判据是「有没有 CSV」，不是目录叫什么。CSV 可以直接放在该目录下，
+    # 也可以分在任意名字的子目录里。
+    from .data_loader import find_csv_dirs
+    found = find_csv_dirs(path)
+    if not found:
+        raise HTTPException(
+            422, "目录下未找到 CSV 行情文件（可直接放在该目录，或放在任意子目录中）")
 
     os.environ["AUTOALPHA_KLINES"] = path
     _reset_data_cache()
-    return {"ok": True, "klines_dir": path, "freqs": sorted(subs)[:8]}
+    return {"ok": True, "klines_dir": path,
+            "found": [{"dir": k, "files": v} for k, v in found.items()][:8],
+            "total_csv": sum(found.values())}
 
 
 def _reset_data_cache():
@@ -519,6 +525,25 @@ def health():
             "has_api_key": any(_os.environ.get(k) for k in
                                ("LLM_API_KEY", "ANTHROPIC_API_KEY",
                                 "DEEPSEEK_API_KEY", "OPENAI_API_KEY"))}
+
+
+_FAVICON = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    b'<rect width="32" height="32" rx="7" fill="#4f8cff"/>'
+    b'<text x="16" y="23" font-size="20" font-weight="bold" '
+    b'text-anchor="middle" fill="white">&#945;</text></svg>'
+)
+
+
+@app.get("/favicon.ico")
+def favicon():
+    """
+    页面里虽已内联 data URI 图标，浏览器仍会单独请求 /favicon.ico，
+    不提供就每次加载留一条 404。
+    """
+    from fastapi.responses import Response
+    return Response(content=_FAVICON, media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/")
