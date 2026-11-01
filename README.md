@@ -1,6 +1,27 @@
 # AutoAlpha — 多Agent量化因子挖掘流水线
 
-> 输入一个研究方向，自动检索相关论文、提取因子假设、实现并评估因子质量，输出因子库与 HTML 质量报告。
+[![tests](https://github.com/EdisonFu/autoalpha/actions/workflows/tests.yml/badge.svg)](https://github.com/EdisonFu/autoalpha/actions/workflows/tests.yml)
+[![lint](https://github.com/EdisonFu/autoalpha/actions/workflows/lint.yml/badge.svg)](https://github.com/EdisonFu/autoalpha/actions/workflows/lint.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
+> 输入一个研究方向，自动检索文献与研报、提取因子假设、生成代码并做 IS/OOS 双层回测，输出可信的因子库。
+
+**和同类项目的区别：多数 LLM 挖因子方案止步于 IC/ICIR，这个项目补了回测层。**
+
+差别有多大？看一个真实的例子 —— 某动量因子 IC 为正、月度胜率 66%，
+按 IC/ICIR 判定「有效」，但它的分层年化收益是：
+
+```
+Q1 +5.4%   Q2 +2.6%   Q3 -2.3%   Q4 +7.5%   Q5 -6.3%
+                                            ↑ 最高分位反而最差
+```
+
+收益堆在中间层，多空组合恰好错过赚钱的层。**IC 显著 ≠ 能赚钱。**
+只看 IC/ICIR 的系统会把这类因子放进因子库。
+
+> ⚠️ 本项目是研究工具，不构成投资建议。通过门控 ≠ 可用于实盘。
+> 详见 [DISCLAIMER.md](DISCLAIMER.md)。
 
 ---
 
@@ -140,6 +161,21 @@ RSS 不支持按词检索，所以是「先抓取入库、再本地筛选」，
 
 ---
 
+## 文档
+
+| 文件 | 内容 |
+|---|---|
+| [CLAUDE.md](CLAUDE.md) | 开发指引：约定与踩过的坑（动手前先读） |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 如何参与 |
+| [DISCLAIMER.md](DISCLAIMER.md) | 免责声明 |
+| [docs/P0_BACKTEST_DESIGN.md](docs/P0_BACKTEST_DESIGN.md) | 回测层设计与实施记录 |
+| [docs/E2E_REVIEW.md](docs/E2E_REVIEW.md) | 端到端复盘与实测结论 |
+| [docs/TOKEN_COST.md](docs/TOKEN_COST.md) | 成本实测与省钱开关 |
+| [docs/OPTIMIZATION_PLAN_2026Q4.md](docs/OPTIMIZATION_PLAN_2026Q4.md) | 文献调研与优化路线 |
+| [README_WEB.md](README_WEB.md) | Web 控制台用法 |
+
+---
+
 ## 因子质量门控
 
 | 指标 | 门槛 | 说明 |
@@ -155,11 +191,16 @@ RSS 不支持按词检索，所以是「先抓取入库、再本地筛选」，
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 安装
 
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/EdisonFu/autoalpha.git
+cd autoalpha
+pip install -e ".[anthropic]"      # 或 ".[openai]"，按你用的供应商
 ```
+
+数据平台 SDK 是可选的 —— **不装也能用**，此时走公共数据查询接口。
+需要接 Tushare 等平台时再装：`pip install -e ".[data,tushare]"`。
 
 ### 2. 配置 LLM API Key
 

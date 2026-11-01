@@ -1,0 +1,38 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+
+      # E2E 需要浏览器与运行中的服务，CI 上跳过；
+      # 其余测试不依赖网络与 LLM，可独立运行。
+      - name: Run tests
+        run: pytest tests/ --ignore=tests/test_e2e_ui.py -q
+
+      - name: Check importability
+        run: |
+          python -c "import autoalpha.engine, autoalpha.backtest, autoalpha.metrics"
+          python -c "import autoalpha.sources, autoalpha.json_repair"

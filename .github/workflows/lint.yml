@@ -1,0 +1,31 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Syntax check
+        run: |
+          python -m compileall -q autoalpha scripts main.py
+
+      # 密钥不该进仓库。这里只查明显的硬编码形态，
+      # 不替代 secret scanning。
+      - name: No hardcoded credentials
+        run: |
+          if grep -rnE "(sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{40,})" \
+               --include="*.py" --include="*.md" --include="*.html" . ; then
+            echo "::error::疑似硬编码密钥"
+            exit 1
+          fi
+          echo "未发现硬编码密钥"

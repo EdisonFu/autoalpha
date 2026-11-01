@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoalpha"
+version = "0.3.0"
+description = "LLM-driven alpha factor research pipeline with honest IS/OOS evaluation"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "EdisonFu" }]
+keywords = ["quantitative-finance", "alpha-factor", "llm", "agent",
+            "backtesting", "factor-mining"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Financial and Insurance Industry",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
+
+# 核心依赖只放跑流水线必需的。各数据平台的 SDK 是可选的 ——
+# 不装也能用公共数据接口，装了才启用对应平台。
+dependencies = [
+  "pandas>=1.5.0",
+  "numpy>=1.21.0",
+  "scipy>=1.9.0",
+  "fastapi>=0.110.0",
+  "uvicorn[standard]>=0.27.0",
+  "sse-starlette>=2.0.0",
+  "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+# LLM 客户端：按你用的供应商选装
+anthropic = ["anthropic>=0.20.0"]
+openai = ["openai>=1.0.0"]
+# 数据平台：不装则走公共数据查询接口
+data = ["akshare>=1.10.0", "baostock>=0.8.8"]
+tushare = ["tushare>=1.2.89"]
+# 开发
+dev = ["pytest>=8.0.0", "httpx>=0.27.0", "playwright>=1.40.0", "Pillow>=10.0.0"]
+all = ["autoalpha[anthropic,openai,data,dev]"]
+
+[project.urls]
+Homepage = "https://github.com/EdisonFu/autoalpha"
+Repository = "https://github.com/EdisonFu/autoalpha"
+Issues = "https://github.com/EdisonFu/autoalpha/issues"
+
+[project.scripts]
+autoalpha = "main:main"
+
+[tool.setuptools]
+packages = ["autoalpha", "autoalpha.agents", "autoalpha.sources"]
+py-modules = ["main"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
