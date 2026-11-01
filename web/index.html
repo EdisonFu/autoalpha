@@ -171,6 +171,8 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 .fx .hd{display:flex;justify-content:space-between;align-items:center;gap:10px;
   flex-wrap:wrap;margin-bottom:12px}
 .fx .nm{font-size:14px;font-weight:600;font-family:var(--mono)}
+.fxdesc{font-size:12px;color:var(--fg2);line-height:1.65;margin:-4px 0 11px;
+  padding-left:10px;border-left:2px solid var(--line)}
 .tag{font-size:11px;padding:3px 10px;border-radius:5px;font-weight:600}
 .tag.pass{background:rgba(34,197,94,.17);color:var(--ok)}
 .tag.fail{background:rgba(239,68,68,.17);color:var(--bad)}
@@ -757,13 +759,17 @@ function showEvals(){
       const sk=e.status==='SKIP_NO_DATA', p=e.status==='PASS';
       const cls=sk?'skip':(p?'pass':'fail');
       const dec=e.sharpe_decay!=null?`<span>衰减 ${(e.sharpe_decay*100).toFixed(1)}%</span>`:'';
+      const desc=e.zh_what||e.description||'';
+      const descLine=desc?`<div class="fxdesc">${esc(desc)}</div>`:'';
       if(sk) return `<div class="fx skip">
         <div class="hd"><span class="nm">${esc(e.factor_name)}</span>
           <span class="tag skip">未测（数据缺失）</span></div>
+        ${descLine}
         <div class="reason">${esc(e.fail_reason)}</div></div>`;
       return `<div class="fx ${cls}">
         <div class="hd"><span class="nm">${esc(e.factor_name)}</span>
           <span class="tag ${p?'pass':'fail'}">${e.status}</span></div>
+        ${descLine}
         ${e.nav&&e.nav.length?sparkline(e.nav):''}
         <div class="cmp">${pane('样本内 IS',e.is_ic,e.is_layers)}${pane('样本外 OOS',e.oos_ic,e.oos_layers,dec)}</div>
         ${e.fail_reason?`<div class="reason">${esc(e.fail_reason)}</div>`:''}

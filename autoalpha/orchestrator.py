@@ -320,6 +320,7 @@ class FlowOrchestrator:
             skip = _check_data_available(spec, available)
             if skip:
                 ev = _skipped_eval(spec.factor_name, skip)
+                _attach_desc(ev, spec, sess)
                 sess.evaluations.append(ev)
                 yield sess.record(FlowEvent(
                     EventKind.DATA, Stage.EVALUATE,
@@ -348,6 +349,7 @@ class FlowOrchestrator:
                 factor, err = yield from self._implement_with_retry(sess, spec)
             if factor is None:
                 ev = _failed_eval(spec.factor_name, err)
+                _attach_desc(ev, spec, sess)
                 sess.evaluations.append(ev)
                 yield sess.record(FlowEvent(
                     EventKind.DATA, Stage.EVALUATE, f"{spec.factor_name} 实现失败",
@@ -362,6 +364,7 @@ class FlowOrchestrator:
                     n_trials=max(1, len(sess.evaluations) + 1))
             except Exception as e:
                 ev = _failed_eval(spec.factor_name, f"评估异常: {e}")
+            _attach_desc(ev, spec, sess)
             sess.evaluations.append(ev)
 
             if ev.status == "PASS":
@@ -713,6 +716,21 @@ def _check_data_available(spec, available_cols: set) -> Optional[str]:
         return ("需要本数据集没有的数据：" + "；".join(parts)
                 + "。本数据集 = 中国A股市场 ETF 的日频 OHLCV")
     return None
+
+
+def _attach_desc(ev, spec, sess) -> None:
+    """
+    把因子描述带到评估结果上。结果卡片只显示名字时，用户得回头翻
+    假设列表才知道这个因子在做什么。优先用中文说明（若已生成）。
+    """
+    ev.description = (spec.description or spec.hypothesis or "")[:300]
+    zh = getattr(sess, "spec_zh", None) or []
+    try:
+        idx = sess.specs.index(spec)
+    except (ValueError, AttributeError):
+        idx = -1
+    if 0 <= idx < len(zh):
+        ev.zh_what = (zh[idx].get("what") or "")[:300]
 
 
 def _skipped_eval(name: str, reason: str):

@@ -149,6 +149,8 @@ def evaluation_to_dict(ev) -> Dict[str, Any]:
     return {
         "factor_name": ev.factor_name, "status": ev.status,
         "fail_reason": ev.fail_reason,
+        "description": getattr(ev, "description", ""),
+        "zh_what": getattr(ev, "zh_what", ""),
         "is_ic": _ic(ev.is_ic), "is_layers": _lm(ev.is_layers),
         "oos_ic": _ic(ev.oos_ic), "oos_layers": _lm(ev.oos_layers),
         "sharpe_decay": _safe(ev.sharpe_decay), "max_nav_corr": _safe(ev.max_nav_corr),

@@ -84,6 +84,10 @@ class FactorEvaluation:
     universe_width: float = 0.0               # 门槛推导依据
     status: str = ""                           # PASS / FAIL_IS / FAIL_OOS
     fail_reason: str = ""
+    # 因子在做什么。结果卡片只有名字时，用户得回头翻假设列表才知道
+    # 这是什么因子，所以把描述一路带到结果里。
+    description: str = ""
+    zh_what: str = ""
     code_path: str = ""
     nav_net: Optional[object] = None           # pd.Series，用于后续去重
 
