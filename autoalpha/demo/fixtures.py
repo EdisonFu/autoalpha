@@ -90,23 +90,50 @@ def _nav(seed, n=180, drift=0.0004, vol=0.009):
     return out
 
 
+def _mk_ic(t, n_obs, win, cov=0.9998):
+    return {"ic_mean_1d": round(t / 70, 4), "icir_daily": round(t / 28, 3),
+            "icir_annual": round(t / 28 * 15.87, 2), "ic_tstat": t,
+            "n_obs": n_obs, "monthly_win_rate": win, "n_months": n_obs // 21,
+            "ic_by_lag": {}, "ic_halflife": 20.0, "coverage": cov}
+
+
+def _mk_layers(mono, shp, net, turn, layers):
+    return {"n_quantiles": 5, "layer_ann_returns": layers,
+            "monotonicity": mono,
+            "long_short": {"ann_return": round(shp * 0.22, 4),
+                           "ann_return_net": round(net * 0.22, 4),
+                           "sharpe": shp, "sharpe_net": net,
+                           "max_drawdown": -0.11, "calmar": 0.8,
+                           "turnover_daily": turn},
+            "long_only": None}
+
+
 def _eval(name, status, zh, t, mono, shp, net, turn, layers, nav,
           reason="", decay=None):
-    ic = {"ic_mean_1d": round(t / 70, 4), "icir_daily": round(t / 28, 3),
-          "icir_annual": round(t / 28 * 15.87, 2), "ic_tstat": t,
-          "n_obs": 752, "monthly_win_rate": 0.63, "n_months": 36,
-          "ic_by_lag": {}, "ic_halflife": 20.0, "coverage": 0.9998}
-    lm = {"n_quantiles": 5, "layer_ann_returns": layers, "monotonicity": mono,
-          "long_short": {"ann_return": round(shp * 0.22, 4),
-                         "ann_return_net": round(net * 0.22, 4),
-                         "sharpe": shp, "sharpe_net": net,
-                         "max_drawdown": -0.11, "calmar": 0.8,
-                         "turnover_daily": turn},
-          "long_only": None}
+    """
+    样本外指标按 decay 从样本内推导，而不是直接复用同一组数字。
+
+    曾让 oos_ic 直接指向 is_ic，于是界面上两栏完全一样 ——
+    看起来像根本没跑样本外，而样本内外对照正是这个项目的重点。
+    OOS 期更短（231 日 vs 752 日），t 值与月数也应随之不同。
+    """
+    is_ic = _mk_ic(t, 752, 0.63)
+    is_lm = _mk_layers(mono, shp, net, turn, layers)
+
+    oos_ic = oos_lm = None
+    if status == "PASS":
+        d = decay if decay is not None else -0.15
+        # OOS 样本更短，t 值按 sqrt(n) 缩放后再乘衰减
+        t_oos = round(t * (231 / 752) ** 0.5 * (1 + d) / (1 + d * 0.5), 2)
+        oos_ic = _mk_ic(t_oos, 231, round(0.63 * (1 + d * 0.3), 2))
+        oos_lm = _mk_layers(
+            round(mono * (1 + d * 0.4), 2),
+            round(shp * (1 + d), 3), round(net * (1 + d), 3), turn,
+            [round(x * (1 + d), 4) for x in layers])
+
     return {"factor_name": name, "status": status, "fail_reason": reason,
-            "description": "", "zh_what": zh, "is_ic": ic, "is_layers": lm,
-            "oos_ic": ic if status == "PASS" else None,
-            "oos_layers": lm if status == "PASS" else None,
+            "description": "", "zh_what": zh, "is_ic": is_ic,
+            "is_layers": is_lm, "oos_ic": oos_ic, "oos_layers": oos_lm,
             "sharpe_decay": decay, "max_nav_corr": 0.21,
             "universe_width": 92.0, "nav": nav}
 

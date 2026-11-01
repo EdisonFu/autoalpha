@@ -143,7 +143,17 @@ screenshots of every stage.
 
 ![intent](docs/screenshots/04-step1-intent.png)
 
+Each factor gets a full layered backtest: a long-short cumulative return curve
+(Y axis in percent), in-sample and out-of-sample side by side, and per-quintile
+annual returns. Factors that fail the IS gate never touch OOS data, so their
+OOS column reads "not reached" rather than showing numbers that look plausible.
+
 ![evaluation](docs/screenshots/08-step5-backtest.png)
+
+The second factor in that view, `etf_reversal_overlay`, is the case from the
+top of this page: IC is significant at t=2.10, but layer monotonicity is −0.30
+and the top quintile performs worst. An IC/ICIR-only pipeline would file it as
+a working factor.
 
 ---
 
