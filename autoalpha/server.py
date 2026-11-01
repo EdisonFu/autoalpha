@@ -271,6 +271,96 @@ def session_state(session_id: str):
     }
 
 
+class LLMConfigReq(BaseModel):
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    base_url: Optional[str] = None
+    price_input: Optional[float] = None
+    price_output: Optional[float] = None
+
+
+def _mask(key: str) -> str:
+    if not key:
+        return ""
+    return f"{key[:6]}…{key[-4:]}" if len(key) > 14 else "已设置"
+
+
+@app.get("/api/llm/config")
+def llm_config_get():
+    """当前 LLM 配置。密钥只回传掩码，不回传明文。"""
+    import os as _os
+    key = next((_os.environ.get(e) for e, _p, _u in
+                __import__("autoalpha.llm", fromlist=["_KEY_ENVS"])._KEY_ENVS
+                if _os.environ.get(e)), "")
+    return {
+        "has_key": bool(key),
+        "key_masked": _mask(key),
+        "model": _os.environ.get("LLM_MODEL", ""),
+        "base_url": _os.environ.get("LLM_BASE_URL", ""),
+        "price_input": _os.environ.get("LLM_PRICE_INPUT", ""),
+        "price_output": _os.environ.get("LLM_PRICE_OUTPUT", ""),
+    }
+
+
+@app.post("/api/llm/config")
+def llm_config_set(req: LLMConfigReq):
+    """
+    更新 LLM 配置并重建客户端。
+
+    只写进本进程的环境变量，不落盘：密钥不该被写进仓库或配置文件。
+    重启服务后需要重新设置，或用启动前的环境变量。
+    """
+    import os as _os
+    global _orch
+
+    if req.api_key:
+        _os.environ["LLM_API_KEY"] = req.api_key.strip()
+    if req.model is not None:
+        _os.environ["LLM_MODEL"] = req.model.strip()
+    if req.base_url is not None:
+        v = req.base_url.strip()
+        if v:
+            _os.environ["LLM_BASE_URL"] = v
+        else:
+            _os.environ.pop("LLM_BASE_URL", None)
+    for field, env in (("price_input", "LLM_PRICE_INPUT"),
+                       ("price_output", "LLM_PRICE_OUTPUT")):
+        v = getattr(req, field)
+        if v is not None:
+            _os.environ[env] = str(v)
+
+    if not _os.environ.get("LLM_MODEL"):
+        raise HTTPException(422, "必须指定模型 ID")
+
+    # 重建编排器，让新配置对后续会话生效
+    with _lock:
+        _orch = None
+    try:
+        get_orch()
+    except Exception as e:
+        raise HTTPException(422, f"配置无法初始化: {e}")
+    return {"ok": True, **llm_config_get()}
+
+
+@app.post("/api/llm/test")
+def llm_test():
+    """用一次最小调用验证配置可用，并回报延迟与用量。"""
+    import time as _time
+    try:
+        orch = get_orch()
+    except Exception as e:
+        raise HTTPException(422, f"配置无效: {e}")
+    t0 = _time.time()
+    try:
+        out = orch.llm.complete(system="Reply with the single word: ok",
+                                user="ping", purpose="healthcheck")
+    except Exception as e:
+        raise HTTPException(502, f"调用失败: {str(e)[:200]}")
+    return {"ok": True, "latency_ms": int((_time.time() - t0) * 1000),
+            "reply": (out or "").strip()[:60],
+            "usage": orch.llm.meter.summary()}
+
+
 @app.get("/api/usage")
 def usage():
     """当前进程累计的 LLM token 用量与估算花费。"""

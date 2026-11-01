@@ -159,3 +159,28 @@ def test_endpoints_return_409_when_busy():
     release.set(); time.sleep(0.2)
     for d in (server._sessions, server._queues, server._running):
         d.pop(sid, None)
+
+
+def test_llm_config_never_returns_plaintext_key():
+    """配置接口只回掩码。明文密钥不得出现在任何响应里。"""
+    import os
+    from fastapi.testclient import TestClient
+
+    old = os.environ.get("LLM_API_KEY")
+    os.environ["LLM_API_KEY"] = "sk-secret-value-1234567890"
+    try:
+        c = TestClient(server.app)
+        body = c.get("/api/llm/config").text
+        assert "sk-secret-value-1234567890" not in body
+        assert "…" in body or "已设置" in body
+    finally:
+        if old is None:
+            os.environ.pop("LLM_API_KEY", None)
+        else:
+            os.environ["LLM_API_KEY"] = old
+
+
+def test_llm_config_requires_model():
+    from fastapi.testclient import TestClient
+    c = TestClient(server.app)
+    assert c.post("/api/llm/config", json={"model": ""}).status_code == 422

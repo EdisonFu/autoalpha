@@ -105,6 +105,49 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   gap:5px;padding:5px 10px;background:#0d1320;border:1px solid var(--line);
   border-radius:7px;cursor:pointer}
 .srcbox input{accent-color:var(--acc)}
+
+/* 顶栏配置按钮 */
+.iconbtn{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;font-size:12.5px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--fg2);flex:none;
+  box-shadow:0 0 0 0 rgba(34,197,94,.55)}
+.dot.on{background:var(--ok);animation:pulse 2.4s ease-out infinite}
+.dot.off{background:var(--bad)}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}
+  70%{box-shadow:0 0 0 7px rgba(34,197,94,0)}
+  100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+
+/* 弹窗 */
+.mask{display:none;position:fixed;inset:0;z-index:50;background:rgba(5,8,14,.72);
+  backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:20px}
+.mask.show{display:flex;animation:fade .2s ease}
+.modal{background:linear-gradient(180deg,var(--card),var(--bg2));
+  border:1px solid var(--line);border-radius:16px;padding:22px;width:100%;
+  max-width:470px;box-shadow:0 24px 60px rgba(0,0,0,.5);animation:rise .24s ease}
+@keyframes rise{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}
+.modal h3{margin:0 0 16px;font-size:15px}
+.mrow{margin-bottom:12px}
+.mrow2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.modal label{display:block;font-size:10.5px;color:var(--fg2);text-transform:uppercase;
+  letter-spacing:.5px;margin-bottom:5px}
+.modal input{width:100%;background:#0d1320;border:1px solid var(--line);color:var(--fg);
+  padding:10px 12px;border-radius:8px;font-size:13px;outline:none;transition:.16s;
+  font-family:var(--mono)}
+.modal input:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(79,140,255,.15)}
+.cfgmsg{font-size:11.5px;margin-top:10px;line-height:1.6;font-family:var(--mono)}
+.cfgmsg.ok{color:var(--ok)} .cfgmsg.err{color:var(--bad)} .cfgmsg.wait{color:var(--fg2)}
+
+/* 步骤条：完成态的连接线 */
+.step.done::before{content:'';position:absolute;left:0;top:0;height:2px;width:100%;
+  background:linear-gradient(90deg,var(--ok),rgba(34,197,94,.25))}
+
+/* 卡片悬停微反馈 */
+.fx{transition:border-color .18s,transform .18s}
+.fx:hover{border-color:#2f3e5c;transform:translateY(-1px)}
+
+/* 数值滚动入场 */
+.kv .v{animation:pop .3s ease}
+@keyframes pop{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .zh.rel b{color:var(--acc2)}
 .usage{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--fg2);
   font-family:var(--mono);margin-top:10px;padding:9px 11px;background:#0d1320;
@@ -173,7 +216,10 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 <div class="wrap">
   <header>
     <div class="logo">α</div>
-    <div><h1>AutoAlpha</h1></div>
+    <div style="flex:1"><h1>AutoAlpha</h1></div>
+    <button class="ghost iconbtn" onclick="openCfg()" title="LLM 配置">
+      <span id="cfgDot" class="dot"></span>LLM 配置
+    </button>
   </header>
   <div class="sub">研究方向 → 论文检索 → 因子假设 → 实现 → IS/OOS 双层回测 → 因子库</div>
 
@@ -187,7 +233,37 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
     <div class="chips" id="chips"></div>
   </div>
 
-  <div class="steps" id="steps"></div>
+  <div id="cfgMask" class="mask" onclick="if(event.target===this)closeCfg()">
+  <div class="modal">
+    <h3>LLM 配置</h3>
+    <div class="mrow">
+      <label>API Key</label>
+      <input id="cfgKey" type="password" placeholder="留空则保持当前密钥" autocomplete="off">
+    </div>
+    <div class="mrow">
+      <label>模型 ID</label>
+      <input id="cfgModel" type="text" placeholder="如 claude-sonnet-4-6 / gpt-4o" autocomplete="off">
+    </div>
+    <div class="mrow">
+      <label>Base URL</label>
+      <input id="cfgBase" type="text" placeholder="OpenAI 兼容端点，留空用默认" autocomplete="off">
+    </div>
+    <div class="mrow2">
+      <div><label>输入单价 $/M</label><input id="cfgPin" type="text" placeholder="3.0"></div>
+      <div><label>输出单价 $/M</label><input id="cfgPout" type="text" placeholder="15.0"></div>
+    </div>
+    <div class="note">配置只存在于当前服务进程，不落盘。重启后需重新设置，
+      或在启动前用 <code>LLM_API_KEY</code> / <code>LLM_MODEL</code> 环境变量。</div>
+    <div id="cfgMsg" class="cfgmsg"></div>
+    <div class="actions">
+      <button onclick="saveCfg()">保存</button>
+      <button class="ghost" onclick="testCfg()">测试连通</button>
+      <button class="ghost" onclick="closeCfg()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="steps" id="steps"></div>
   <div id="panels"></div>
 
   <div class="card">
@@ -229,6 +305,7 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;',
 const fmt=(v,d=3)=>v==null||isNaN(v)?'—':Number(v).toFixed(d);
 const pct=v=>v==null||isNaN(v)?'—':(Number(v)*100).toFixed(2)+'%';
 
+loadCfg();
 $('chips').innerHTML=EXAMPLES.map(e=>`<div class="chip" onclick="$('idea').value='${e}'">${e}</div>`).join('');
 $('idea').addEventListener('keydown',e=>{if(e.key==='Enter')start('stepwise')});
 
@@ -499,6 +576,74 @@ async function doExtend(){
   await fetch('/api/extend',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({session_id:SID})});
 }
+
+// ── LLM 配置 ────────────────────────────────────────────────────────────
+let CFG=null;
+
+async function loadCfg(){
+  try{
+    CFG=await (await fetch('/api/llm/config')).json();
+    const d=$('cfgDot');
+    if(d)d.className='dot '+(CFG.has_key&&CFG.model?'on':'off');
+    return CFG;
+  }catch(e){return null}
+}
+
+function openCfg(){
+  loadCfg().then(c=>{
+    if(c){
+      $('cfgKey').value='';
+      $('cfgKey').placeholder=c.has_key?`当前 ${c.key_masked}（留空不改）`:'必填';
+      $('cfgModel').value=c.model||'';
+      $('cfgBase').value=c.base_url||'';
+      $('cfgPin').value=c.price_input||'';
+      $('cfgPout').value=c.price_output||'';
+    }
+    cfgMsg('', '');
+    $('cfgMask').classList.add('show');
+  });
+}
+function closeCfg(){$('cfgMask').classList.remove('show')}
+function cfgMsg(t,cls){const e=$('cfgMsg');if(e){e.textContent=t;e.className='cfgmsg '+(cls||'')}}
+
+async function saveCfg(){
+  const body={
+    model:$('cfgModel').value.trim(),
+    base_url:$('cfgBase').value.trim(),
+  };
+  const k=$('cfgKey').value.trim();
+  if(k)body.api_key=k;
+  const pin=parseFloat($('cfgPin').value), pout=parseFloat($('cfgPout').value);
+  if(!isNaN(pin))body.price_input=pin;
+  if(!isNaN(pout))body.price_output=pout;
+  if(!body.model){cfgMsg('请填写模型 ID','err');return}
+
+  cfgMsg('保存中…','wait');
+  try{
+    const r=await fetch('/api/llm/config',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json();
+    if(!r.ok){cfgMsg(j.detail||'保存失败','err');return}
+    CFG=j; $('cfgKey').value='';
+    const d=$('cfgDot'); if(d)d.className='dot on';
+    cfgMsg('已保存，对后续会话生效','ok');
+    log('LLM 配置已更新：'+(j.model||''));
+  }catch(e){cfgMsg('保存失败：'+e,'err')}
+}
+
+async function testCfg(){
+  cfgMsg('测试中…','wait');
+  try{
+    const r=await fetch('/api/llm/test',{method:'POST'});
+    const j=await r.json();
+    if(!r.ok){cfgMsg(j.detail||'调用失败','err');return}
+    cfgMsg(`连通正常 · 延迟 ${j.latency_ms}ms · 回复 "${j.reply}"`,'ok');
+  }catch(e){cfgMsg('测试失败：'+e,'err')}
+}
+
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape')closeCfg();
+});
 
 async function refreshFeeds(){
   log('抓取 RSS 灵感池…');
