@@ -5,8 +5,10 @@
 数据源弹窗在小视口下内容被裁掉且无法滚动，逻辑测试全绿却漏掉了。
 凡是涉及尺寸、滚动、可见性的断言，必须在真实渲染环境里做。
 
-需要 chromium：.venv/bin/playwright install chromium
-无浏览器时整个文件跳过，不阻塞其它测试。
+浏览器来源：优先用系统已装的 Chrome（channel="chrome"），
+其次用 playwright 自带的 chromium。本环境的网络白名单拦掉了
+cdn.playwright.dev（实测 307 且零字节），装不了自带 chromium，
+所以系统 Chrome 是主路径。两者都没有时整个文件跳过。
 """
 
 import os
@@ -23,17 +25,21 @@ PORT = 8799
 BASE = f"http://127.0.0.1:{PORT}"
 
 
-def _chromium_ready() -> bool:
-    try:
-        with sync_playwright() as p:
-            p.chromium.launch().close()
-        return True
-    except Exception:
-        return False
+def _pick_browser():
+    """返回可用的 launch 参数，没有可用浏览器则 None。"""
+    for kw in ({"channel": "chrome"}, {"channel": "msedge"}, {}):
+        try:
+            with sync_playwright() as p:
+                p.chromium.launch(**kw).close()
+            return kw
+        except Exception:
+            continue
+    return None
 
 
-pytestmark = pytest.mark.skipif(not _chromium_ready(),
-                                reason="chromium 未安装")
+LAUNCH = _pick_browser()
+pytestmark = pytest.mark.skipif(LAUNCH is None,
+                                reason="无可用浏览器（系统 Chrome 或 chromium）")
 
 
 @pytest.fixture(scope="module")
@@ -61,12 +67,15 @@ def server():
 @pytest.fixture
 def page(server):
     with sync_playwright() as p:
-        br = p.chromium.launch()
+        br = p.chromium.launch(**LAUNCH)
         pg = br.new_page(viewport={"width": 1280, "height": 720})
         errors = []
-        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.on("pageerror", lambda e: errors.append(f"JS: {e}"))
+        # 只收真正的脚本错误。浏览器自动请求 favicon 等资源产生的
+        # 网络 404 会混进 console error，与页面代码无关。
         pg.on("console", lambda m: errors.append(m.text)
-              if m.type == "error" else None)
+              if m.type == "error" and "Failed to load resource" not in m.text
+              else None)
         pg.goto(server, wait_until="networkidle")
         pg._errors = errors
         yield pg
@@ -98,7 +107,9 @@ def test_data_modal_scrolls_in_small_viewport(page):
     page.click("text=数据源")
     page.wait_for_selector("#dataMask.show", timeout=5000)
 
-    modal = page.query_selector(".modal")
+    # 页面上有两个 .modal（LLM / 数据源），必须限定到当前这个 ——
+    # 泛选择器会命中隐藏的那个，bounding_box() 返回 None
+    modal = page.query_selector("#dataMask .modal")
     box = modal.bounding_box()
     assert box["height"] <= 560, f"弹窗高 {box['height']} 超出视口"
 
