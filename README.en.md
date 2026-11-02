@@ -141,6 +141,14 @@ base URL and data sources are all editable in the UI.
 See the [Chinese README](README.md#界面一览) for the full walkthrough with
 screenshots of every stage.
 
+![overview](docs/screenshots/00-overview.png)
+
+One sentence in, eight steps out. Every step on the bar carries its own
+output: the intent resolves to "A股 · momentum · daily", retrieval returns
+3 papers, data prep yields 92 symbols over 752 in-sample days, extraction
+produces 2 hypotheses, evaluation passes 3 of 6 through the gates. Click any
+step to expand it.
+
 ![intent](docs/screenshots/04-step1-intent.png)
 
 Each factor gets a full layered backtest: a long-short cumulative return curve

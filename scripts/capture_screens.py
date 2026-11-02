@@ -171,6 +171,38 @@ def main():
         pg.wait_for_timeout(500)
         snap("08-step5-backtest", step="evaluate", panel="#pEval")
 
+        # 0 概览：页头 + 输入区 + 跑完的步骤条。README 的第一张图，
+        #   要让人一眼看懂整条流程走到哪、每步产出了什么。
+        #   先补上延伸探索 —— 否则 Step 7 停在未完成而 Step 8 已完成，
+        #   步骤条自相矛盾。
+        pg.evaluate("""(d) => {
+            const exts=d.extensions, res=d.ext_evals||[];
+            handle({kind:'stage_start',stage:'extend',message:'生成延伸变体',payload:{}});
+            handle({kind:'data',stage:'extend',
+                message:`生成 ${exts.length} 个延伸变体`,
+                payload:{specs:exts.map((x,i)=>({idx:1000+i,...x}))}});
+            res.forEach(e => handle({kind:'data',stage:'evaluate',
+                message:e.factor_name,payload:{evaluation:e}}));
+            const np=res.filter(e=>e.status==='PASS').length;
+            handle({kind:'stage_end',stage:'extend',
+                message:`延伸完成：${np}/${res.length} 通过门控`,payload:{}});
+            handle({kind:'stage_end',stage:'done',message:'本轮完成',payload:{}});
+            document.querySelector('#cardFeeds').classList.add('hidden');
+            window.scrollTo(0, 0);
+        }""", {"extensions": fx["extensions"], "ext_evals": fx["ext_evals"]})
+        pg.wait_for_timeout(400)
+        # 从 header 起（不是 .hero）——以 .hero 为上边界会把页头按钮
+        # 拦腰截断，看起来像截坏了。
+        box = pg.evaluate("""() => {
+            const t=document.querySelector('header').getBoundingClientRect();
+            const s=document.querySelector('#steps').getBoundingClientRect();
+            return {x:Math.max(0,t.x-16), y:Math.max(0,t.y-12),
+                    width:t.width+32, height:(s.y+s.height)-t.y+28};
+        }""")
+        pg.screenshot(path=os.path.join(OUT, "00-overview.png"), clip=box)
+        shots.append("00-overview")
+        print("  ✓ 00-overview.png", flush=True)
+
         # 9 灵感池
         pg.evaluate("""(items) => {
             document.querySelector('#cardFeeds').classList.remove('hidden');
