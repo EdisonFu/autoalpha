@@ -17,6 +17,17 @@ class CreditExhaustedError(RuntimeError):
     """Raised when the API account has insufficient credits."""
 
 
+class OutputTruncatedError(RuntimeError):
+    """
+    模型输出撞上 max_tokens。
+
+    单列一类是因为它的表现极具迷惑性：推理模型预算耗尽时返回的是**空字符串**
+    而不是异常，下游只看到「JSON 解析失败」或「提取到 0 个因子」，
+    真因（预算不够）完全不可见。实测 deepseek-v4.1-flash 在 1200 预算下
+    reasoning 吃满 1200、content 0 字节、finish_reason=length。
+    """
+
+
 # ── Token 计量 ───────────────────────────────────────────────────────────────
 # 价格（美元 / 百万 input / output token），用于把 token 数换算成花费。
 #
@@ -66,6 +77,37 @@ _PRICE_RULES = [
     (("gemini", "flash"),  (0.075, 0.30)),
     (("gemini",),          (1.25,  5.00)),
 ]
+
+
+# 推理模型（DeepSeek v4.x / o-series / thinking 类）把思维链也算进 completion
+# 预算。8192 对「摘要进、JSON 出」够用，但读全文后 prompt 涨到 12000 字符、
+# 推理随之变长就不够了 —— 这是全文解析引入的回归。
+_DEFAULT_MAX_TOKENS = 8192
+_REASONING_MAX_TOKENS = 32768
+_REASONING_HINTS = ("deepseek-v4", "deepseek-r1", "reasoner", "thinking",
+                    "qwq", "o1", "o3", "gpt-5")
+
+
+def _is_reasoning_model(model: str) -> bool:
+    m = (model or "").lower()
+    return any(h in m for h in _REASONING_HINTS)
+
+
+def max_tokens_for(model: str) -> int:
+    """
+    输出 token 上限。LLM_MAX_TOKENS 可显式覆盖（换网关、换模型时用）。
+
+    推理模型给更大的默认值 —— 思维链与正文共享这个预算，
+    预算不足时拿到的是空字符串而不是异常，排查起来很贵。
+    """
+    try:
+        v = int(os.environ.get("LLM_MAX_TOKENS", "") or 0)
+        if v > 0:
+            return v
+    except ValueError:
+        pass
+    return (_REASONING_MAX_TOKENS if _is_reasoning_model(model)
+            else _DEFAULT_MAX_TOKENS)
 
 
 def _price_for(model: str):
@@ -214,7 +256,7 @@ class LLMClient:
         if self.provider == "anthropic":
             kwargs: Dict[str, Any] = dict(
                 model=self.model,
-                max_tokens=8192,
+                max_tokens=max_tokens_for(self.model),
                 system=system or "You are a helpful assistant.",
                 messages=[{"role": "user", "content": content}],
             )
@@ -231,13 +273,17 @@ class LLMClient:
             if u is not None:
                 self.meter.record(purpose, getattr(u, "input_tokens", 0) or 0,
                                   getattr(u, "output_tokens", 0) or 0, self.model)
+            if getattr(msg, "stop_reason", "") == "max_tokens":
+                raise OutputTruncatedError(
+                    f"模型输出被 max_tokens 截断（{purpose}）：上限 "
+                    f"{max_tokens_for(self.model)}。用 LLM_MAX_TOKENS 调高。")
             return msg.content[0].text
         else:
             messages = []
             if system:
                 messages.append({"role": "system", "content": system})
             messages.append({"role": "user", "content": content})
-            kwargs = dict(model=self.model, messages=messages, max_tokens=8192)
+            kwargs = dict(model=self.model, messages=messages, max_tokens=max_tokens_for(self.model))
             if temperature is not None:
                 kwargs["temperature"] = temperature
             resp = self.client.chat.completions.create(**kwargs)
@@ -245,7 +291,22 @@ class LLMClient:
             if u is not None:
                 self.meter.record(purpose, getattr(u, "prompt_tokens", 0) or 0,
                                   getattr(u, "completion_tokens", 0) or 0, self.model)
-            return resp.choices[0].message.content
+            choice = resp.choices[0]
+            text = choice.message.content or ""
+            # 截断必须可见：推理模型预算耗尽时返回空串而非异常，
+            # 下游只看到「JSON 解析失败」，查不到真因。
+            if getattr(choice, "finish_reason", "") == "length":
+                rt = 0
+                det = getattr(u, "completion_tokens_details", None)
+                if det is not None:
+                    rt = getattr(det, "reasoning_tokens", 0) or 0
+                raise OutputTruncatedError(
+                    f"模型输出被 max_tokens 截断（{purpose}）："
+                    f"上限 {max_tokens_for(self.model)}"
+                    + (f"，其中思维链占 {rt}" if rt else "")
+                    + f"，正文仅 {len(text)} 字符。"
+                    f"用 LLM_MAX_TOKENS 调高，或换非推理模型。")
+            return text
 
     def chat_with_tools(self, messages: List[Dict], system: str, tools: List[Dict]) -> Dict:
         """
@@ -257,7 +318,7 @@ class LLMClient:
         if self.provider == "anthropic":
             resp = self.client.messages.create(
                 model=self.model,
-                max_tokens=8192,
+                max_tokens=max_tokens_for(self.model),
                 system=system,
                 messages=messages,
                 tools=tools,
@@ -292,7 +353,7 @@ class LLMClient:
                 model=self.model,
                 messages=oai_messages,
                 tools=openai_tools,
-                max_tokens=8192,
+                max_tokens=max_tokens_for(self.model),
             )
             msg = resp.choices[0].message
             if msg.tool_calls:
