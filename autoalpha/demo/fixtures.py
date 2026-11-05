@@ -51,7 +51,11 @@ DEMO_SPECS = [
      "parameters": {"lookback": 60},
      "zh_what": "衡量每只ETF过去60个交易日的涨跌幅，并在截面上排序。",
      "zh_why": "投资者对信息反应不足与羊群效应使强势资产延续，形成动量。",
-     "zh_how": "计算60日收益率，做3倍标准差winsorize去极值，再按日做截面rank归一化。"},
+     "zh_how": "计算60日收益率，做3倍标准差winsorize去极值，再按日做截面rank归一化。",
+     # 这篇是 arXiv 预印本，读到了全文，窗口长度确实写在正文里
+     "provenance": "fulltext",
+     "provenance_note": "已读取 arXiv 全文（8438 词，取方法论相关章节 12000 字符）",
+     "param_sources": {"lookback": "paper"}},
     {"idx": 1, "factor_name": "etf_volume_weighted_momentum",
      "description": "Volume-weighted momentum",
      "hypothesis": "Price moves backed by volume are more likely to persist",
@@ -59,7 +63,11 @@ DEMO_SPECS = [
      "parameters": {"lookback": 60},
      "zh_what": "以成交量为权重的动量，强调有量配合的价格变动。",
      "zh_why": "带量上涨比缩量上涨更可能延续，成交量提供信号确认。",
-     "zh_how": "对60日窗口内的日收益按成交额加权求和，再做截面rank。"},
+     "zh_how": "对60日窗口内的日收益按成交额加权求和，再做截面rank。",
+     # 这篇只有期刊页，正文在登录墙后 —— 窗口是模型自己定的
+     "provenance": "abstract",
+     "provenance_note": "非 arXiv 来源，正文不可获取（出版商登录墙），仅依据摘要",
+     "param_sources": {"lookback": "default"}},
 ]
 
 DEMO_DATA = {

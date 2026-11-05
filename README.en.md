@@ -151,10 +151,22 @@ step to expand it.
 
 ![intent](docs/screenshots/04-step1-intent.png)
 
-Each factor gets a full layered backtest: a long-short cumulative return curve
-(Y axis in percent), in-sample and out-of-sample side by side, and per-quintile
-annual returns. Factors that fail the IS gate never touch OOS data, so their
-OOS column reads "not reached" rather than showing numbers that look plausible.
+**Every factor states where its parameters came from.** For arXiv papers the
+PDF is downloaded and the methodology sections are fed to the extractor; every
+other source keeps its full text behind a publisher paywall, so only the
+abstract is available. Measured across three papers, the 7 details needed to
+reproduce a factor — lookback window, quantile split, weighting, rebalance
+frequency, costs, sample period, metrics — appear **0–1 times in abstracts and
+4–6 times in full text**. So a `lookback=20` derived from an abstract is the
+model's own choice, not the paper's, and the card says so in amber rather than
+letting it pass as a reproduction. Full-text parsing needs
+`pip install -e ".[fulltext]"` (pypdf, 404KB).
+
+Each factor then gets a full layered backtest: a long-short cumulative return
+curve (Y axis in percent), in-sample and out-of-sample side by side, and
+per-quintile annual returns. Factors that fail the IS gate never touch OOS
+data, so their OOS column reads "not reached" rather than showing numbers that
+look plausible.
 
 ![evaluation](docs/screenshots/08-step5-backtest.png)
 

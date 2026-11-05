@@ -252,7 +252,12 @@ class FlowOrchestrator:
                         "formula": sp.formula, "parameters": sp.parameters,
                         "zh_what": (zh[i].get("what", "") if i < len(zh) else ""),
                         "zh_why": (zh[i].get("why", "") if i < len(zh) else ""),
-                        "zh_how": (zh[i].get("how", "") if i < len(zh) else "")}
+                        "zh_how": (zh[i].get("how", "") if i < len(zh) else ""),
+                        # 参数读自论文还是模型自己定的 —— 用户必须能分辨
+                        "provenance": sp.provenance,
+                        "param_sources": sp.param_sources,
+                        "provenance_note": (sp.source_paper or {}).get(
+                            "provenance_note", "")}
                        for i, sp in enumerate(specs)]}))
         yield sess.record(FlowEvent(EventKind.STAGE_END, Stage.EXTRACT, "提取完成"))
 

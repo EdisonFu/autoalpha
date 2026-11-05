@@ -42,9 +42,11 @@ openai = ["openai>=1.0.0"]
 # 数据平台：不装则走公共数据查询接口
 data = ["akshare>=1.10.0", "baostock>=0.8.8"]
 tushare = ["tushare>=1.2.89"]
+# 论文全文解析：装了才会读 arXiv PDF 正文，否则只用摘要（界面会标注）
+fulltext = ["pypdf>=4.0.0"]
 # 开发
 dev = ["pytest>=8.0.0", "httpx>=0.27.0", "playwright>=1.40.0", "Pillow>=10.0.0"]
-all = ["autoalpha[anthropic,openai,data,dev]"]
+all = ["autoalpha[anthropic,openai,data,dev,fulltext]"]
 
 [project.urls]
 Homepage = "https://github.com/EdisonFu/autoalpha"

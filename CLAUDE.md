@@ -46,6 +46,7 @@ Step 2 search     多源召回 arXiv + OpenAlex + Crossref，跨源去重
 |---|---|
 | `agents/intent_agent.py` | Step 1，输出 `SearchIntent` |
 | `sources/` | 各检索源适配 + 跨源去重，统一 schema |
+| `sources/fulltext.py` | arXiv 全文抓取 + 方法论章节抽取（可选 pypdf） |
 | `sources/feeds.py` | RSS 灵感池（独立于主链路） |
 | `metrics.py` | 指标容器，字段名自带口径 |
 | `backtest.py` | 分层组合、净值、换手、扣费 |
@@ -100,7 +101,14 @@ t 日收盘定的权重吃 t+1 日收益。`backtest.compute_nav` 的契约。
 
 界面示例一律带市场（「A股ETF截面动量轮动」），未识别到市场时在意图面板提示。
 
-**8. 失败必须可见。**
+**8. 参数来源必须如实标注。**
+只读摘要时 LLM 产出的 `lookback=20` 之类是它自己定的 —— 实测摘要中位
+833 字符，7 项复现细节命中 0–1 项，而 arXiv 全文命中 4–6 项。
+`FactorSpec.param_sources` 把每个参数标成 `paper`/`inferred`/`default`，
+且**非 fulltext 路径一律降级为 default** —— 实测 LLM 会把自己定的窗口
+谎报成 `paper`。把编的说成读的，比不标更糟。
+
+**9. 失败必须可见。**
 静默降级是本项目最贵的教训（见 §踩过的坑）。解析失败要留下可读提示，
 不要返回空值。`factor_judge` 解析失败时 **REJECT 而非 APPROVE**——
 审查缺失是扣留因子的理由，不是放行的理由。

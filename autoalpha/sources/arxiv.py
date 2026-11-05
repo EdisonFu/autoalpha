@@ -77,6 +77,11 @@ class ArxivSource(PaperSource):
             pub = (e.findtext("a:published", "", NS) or "")[:10]
             url = e.findtext("a:id", "", NS) or ""
             pdf = url.replace("/abs/", "/pdf/") if "/abs/" in url else url
+            # API 返回的是 http://arxiv.org/...，而明文 http 在部分网络下
+            # 直接超时（实测 http 超时 / https 2s 拿到 1.4MB）。全文解析
+            # 依赖这个链接，所以在入库前就升到 https。
+            if pdf.startswith("http://"):
+                pdf = "https://" + pdf[len("http://"):]
             out.append(self._mk(
                 title=title, abstract=summary, url=pdf, date=pub,
                 source=self.name, venue="arXiv", doc_type="preprint",

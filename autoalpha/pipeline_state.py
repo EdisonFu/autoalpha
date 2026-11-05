@@ -18,6 +18,12 @@ class FactorSpec:
     # LLM 自报：该因子能否用现有数据算出来（修 E2E_REVIEW P-2）
     computable: bool = True
     required_fields: List[str] = field(default_factory=list)
+    # 这个因子是读了全文还是只读摘要提取的："fulltext" | "abstract"
+    provenance: str = "abstract"
+    # 每个参数的来源："paper"（论文明确写了）/ "inferred"（论文暗示）/
+    # "default"（模型自己定的）。只读摘要时一律 default —— 摘要几乎不写
+    # 回看窗口、分位数这类数字，标成「来自论文」是误导。
+    param_sources: Dict = field(default_factory=dict)
 
 
 @dataclass

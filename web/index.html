@@ -126,6 +126,11 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   background:rgba(79,140,255,.07);border-left:2px solid var(--acc);border-radius:0 6px 6px 0}
 .zh.rel{background:rgba(124,92,255,.07);border-left-color:var(--acc2);margin-top:5px}
 .zh b{color:var(--acc);font-weight:600;margin-right:6px;font-size:11px}
+/* 参数来源徽标：读全文(绿) vs 仅摘要(琥珀)。摘要意味着数值多半是模型定的。 */
+.prov{display:inline-block;margin-left:8px;padding:2px 7px;border-radius:9px;
+  font-size:10.5px;font-weight:500;vertical-align:middle;white-space:nowrap}
+.prov.ok{background:rgba(52,199,123,.13);color:#5fd49a;border:1px solid rgba(52,199,123,.3)}
+.prov.warn{background:rgba(240,173,78,.13);color:#e8b563;border:1px solid rgba(240,173,78,.3)}
 .srcline{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
 .badge2{font-size:10px;padding:2px 7px;border-radius:4px;background:#0d1320;
   border:1px solid var(--line);color:var(--fg2);font-family:var(--mono)}
@@ -834,6 +839,17 @@ function showSpecs(){
     <button class="ghost" onclick="selS.clear();drawSpecs()">全不选</button></div>`);
   drawSpecs();
 }
+function provBadge(s){
+  // 读全文还是只读摘要，直接决定参数可不可信 —— 必须摆在卡片上。
+  const ps=s.param_sources||{}, keys=Object.keys(ps);
+  const fromPaper=keys.filter(k=>ps[k]==='paper').length;
+  const made=keys.filter(k=>ps[k]==='default').length;
+  const full=s.provenance==='fulltext';
+  const tip=esc(s.provenance_note||'');
+  let txt=full?'已读全文':'仅摘要';
+  if(keys.length) txt+=` · 参数 ${fromPaper} 项来自论文，${made} 项为模型设定`;
+  return `<span class="prov ${full?'ok':'warn'}" title="${tip}">${txt}</span>`;
+}
 function drawSpecs(){
   $('sList').innerHTML=specs.map((s,i)=>{
     const idx=s.idx!==undefined?s.idx:i;
@@ -842,7 +858,8 @@ function drawSpecs(){
               s.zh_how&&`<b>算法</b>${esc(s.zh_how)}`].filter(Boolean);
     return `<div class="item ${selS.has(idx)?'sel':''}" onclick="togS(${idx})">
       <div class="box">${selS.has(idx)?'✓':''}</div>
-      <div class="bd"><div class="ti"><code>${esc(s.factor_name)}</code></div>
+      <div class="bd"><div class="ti"><code>${esc(s.factor_name)}</code>
+        ${provBadge(s)}</div>
       ${zh.length?`<div class="zh">${zh.join('<br>')}</div>`
                  :`<div class="ab">${esc(s.hypothesis||s.description||'')}</div>`}
       ${s.formula?`<div class="me" style="margin-top:5px"><code>${esc(s.formula)}</code></div>`:''}
