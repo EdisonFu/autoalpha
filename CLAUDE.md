@@ -47,6 +47,7 @@ Step 2 search     多源召回 arXiv + OpenAlex + Crossref，跨源去重
 | `agents/intent_agent.py` | Step 1，输出 `SearchIntent` |
 | `sources/` | 各检索源适配 + 跨源去重，统一 schema |
 | `sources/fulltext.py` | arXiv 全文抓取 + 方法论章节抽取（可选 pypdf） |
+| `sources/backfill.py` | 跨库补摘要（OpenAlex↔Crossref）+ 滤非研究条目 |
 | `sources/feeds.py` | RSS 灵感池（独立于主链路） |
 | `metrics.py` | 指标容器，字段名自带口径 |
 | `backtest.py` | 分层组合、净值、换手、扣费 |
@@ -108,7 +109,15 @@ t 日收盘定的权重吃 t+1 日收益。`backtest.compute_nav` 的契约。
 且**非 fulltext 路径一律降级为 default** —— 实测 LLM 会把自己定的窗口
 谎报成 `paper`。把编的说成读的，比不标更糟。
 
-**9. 失败必须可见。**
+**9. 补资料优先查库，不要爬网。**
+缺摘要多半不是「被墙了」，而是「这个源的这条记录里没有」——
+同一 DOI 在另一家库里往往就有。实测 OpenAlex 与 Crossref 零重叠、
+完全互补，批量回查补全 59% 仅需 4s、零依赖；而抓出版商网页
+（urllib / curl_cffi / Scrapling 三者**数字完全相同**）只有 6%，
+最慢要 1147s。原因是这些 URL 几乎全是 doi.org，卡在连不通与登录墙上，
+指纹伪装对这两种失败都无效。引入爬虫框架前先确认卡点是不是反爬。
+
+**10. 失败必须可见。**
 静默降级是本项目最贵的教训（见 §踩过的坑）。解析失败要留下可读提示，
 不要返回空值。`factor_judge` 解析失败时 **REJECT 而非 APPROVE**——
 审查缺失是扣留因子的理由，不是放行的理由。

@@ -135,6 +135,7 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 .badge2{font-size:10px;padding:2px 7px;border-radius:4px;background:#0d1320;
   border:1px solid var(--line);color:var(--fg2);font-family:var(--mono)}
 .badge2.src{color:var(--acc2);border-color:rgba(124,92,255,.35)}
+.badge2.bf{color:#8fa8c8;border-color:rgba(143,168,200,.3);border-style:dashed}
 .badge2.dt-report{color:var(--warn);border-color:rgba(245,158,11,.4)}
 .badge2.dt-working_paper{color:var(--ok);border-color:rgba(34,197,94,.35)}
 .badge2.dt-paper{color:var(--acc);border-color:rgba(79,140,255,.35)}
@@ -813,6 +814,9 @@ function srcBadge(p){
   if(p.citations>0)out.push(`<span class="badge2">被引 ${p.citations}</span>`);
   const srcs=[p.source,...(p.also_in||[])].filter(Boolean);
   if(srcs.length)out.push(`<span class="badge2 src">${srcs.join(' + ')}</span>`);
+  // 原源没有摘要、靠跨库回查补上的 —— 标出来，便于判断信息来源
+  if(p.abstract_backfilled)out.push(
+    `<span class="badge2 bf" title="原检索源未提供摘要，由另一学术库按 DOI 回查补全">摘要回填</span>`);
   return out.join('');
 }
 

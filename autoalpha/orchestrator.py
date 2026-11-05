@@ -194,6 +194,9 @@ class FlowOrchestrator:
                          "doc_type": p.get("doc_type", "paper"),
                          "citations": p.get("citations", 0),
                          "also_in": p.get("also_in", []),
+                         # 摘要是原源就有，还是跨库回填来的
+                         "abstract_backfilled": bool(
+                             p.get("abstract_backfilled")),
                          "zh_summary": (zh[i].get("summary", "") if i < len(zh) else ""),
                          "zh_relevance": (zh[i].get("relevance", "") if i < len(zh) else "")}
                         for i, p in enumerate(papers)]}))

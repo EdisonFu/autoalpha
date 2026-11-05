@@ -168,6 +168,32 @@ IS 752 天，提取 2 个假设，评估 3/6 通过门控。点任意一步可�
 实测单次召回 115 条、跨源去重后 110 条。每篇带**中文概述**与**相关性判断**。
 文献类型、期刊、被引数、命中来源都标在卡片上。资料多时可分批加载。
 
+**缺摘要的条目会跨库补全。** 召回结果里相当一部分只有标题 ——
+Crossref 缺 59%、OpenAlex 缺 32%。这些条目进 LLM 打分时只凭标题，
+几乎必然被丢掉，SSRN 工作论文尤其吃亏（`How to Improve ETF Sector Momentum`
+这类标题一看就对口，系统却一无所知）。
+
+补法是**查另一家的库，不是爬出版商网页**：同一个 DOI 在 Crossref 缺的，
+OpenAlex 往往有，反之亦然。实测两家零重叠、完全互补：
+
+| 方案 | 新增依赖 | 补全率 | 耗时 |
+|---|---|---|---|
+| OpenAlex + Crossref 批量 DOI 回查 | 无 | **59%** | 4s |
+| 抓出版商网页（urllib / curl_cffi / Scrapling 均同） | 0–900MB | 6% | 14–1147s |
+
+爬网补不上是因为这些 URL 几乎全是 `doi.org`，解析到 Cloudflare 后大面积
+超时；能连通的又多是 Elsevier / Wiley 的登录墙 —— 指纹伪装对「连不上」
+和「内容不在页面上」都无效。
+
+同时滤掉非研究条目（OECD 图表、书籍章节），它们占着打分配额还要花 token 评判。
+合计效果：
+
+```
+          全文可读   有摘要   只有标题
+改动前      62%       20%      18%
+改动后      66%       29%       5%
+```
+
 ### Step 3 · 数据准备
 
 ![数据准备](docs/screenshots/06-step3-data.png)
@@ -264,6 +290,7 @@ autoalpha/
 │   ├── arxiv.py / openalex.py / crossref.py   检索源
 │   ├── base.py                  统一 schema + 跨源去重
 │   ├── fulltext.py              arXiv 全文抓取 + 方法论章节抽取
+│   ├── backfill.py              跨库补摘要 + 非研究条目过滤
 │   └── feeds.py                 RSS 灵感池
 ├── engine.py                    IS/OOS 切分 + 门槛推导 + 双层门控
 ├── backtest.py                  分层组合 / 净值 / 换手 / 扣费

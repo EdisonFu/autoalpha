@@ -28,7 +28,7 @@ DEMO_PAPERS = [
     {"idx": 1, "title": "Refining ETF Asset Momentum Strategy",
      "url": "https://doi.org/10.2139/ssrn.xxxxx", "date": "2025-06-01",
      "source": "crossref", "venue": "SSRN", "doc_type": "working_paper",
-     "citations": 3,
+     "citations": 3, "abstract_backfilled": True,
      "abstract": "We refine ETF asset momentum with volatility scaling...",
      "zh_summary": "针对ETF资产动量策略提出改进：引入波动率调整与换手约束，"
                    "降低实盘摩擦成本。",

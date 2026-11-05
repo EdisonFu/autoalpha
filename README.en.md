@@ -151,6 +151,25 @@ step to expand it.
 
 ![intent](docs/screenshots/04-step1-intent.png)
 
+**Entries missing an abstract are backfilled across databases.** A sizeable
+share of hits arrive with nothing but a title — Crossref misses 59%, OpenAlex
+32% — and those get scored on the title alone, so they are almost always
+discarded. Working papers suffer most.
+
+The fix is querying another catalogue, not scraping publisher pages: a DOI
+Crossref lacks is usually present in OpenAlex, and vice versa. The two were
+measured to have zero overlap. Backfill recovers **59% in 4 seconds with no new
+dependency**, where scraping the publisher pages recovers 6% — identically for
+urllib, curl_cffi and Scrapling, since those URLs are nearly all `doi.org`,
+which times out at Cloudflare or lands on a login wall. Fingerprint spoofing
+addresses neither failure.
+
+```
+            full text   abstract   title only
+before         62%        20%         18%
+after          66%        29%          5%
+```
+
 **Every factor states where its parameters came from.** For arXiv papers the
 PDF is downloaded and the methodology sections are fed to the extractor; every
 other source keeps its full text behind a publisher paywall, so only the

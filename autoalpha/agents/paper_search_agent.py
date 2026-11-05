@@ -41,7 +41,7 @@ _DOC_WEIGHT = {
     "working_paper": 0.88,   # SSRN 工作论文
     "preprint":      0.72,
     "thesis":        0.60,
-    "book":          0.50,
+    "book":          0.50,   # 正常会被 drop_non_research 滤掉，留作兜底
 }
 # 时间项半衰期：3 年前的论文时间得分 0.5，而非线性归一化的近 0
 _RECENCY_HALFLIFE_DAYS = 365 * 3
@@ -181,6 +181,7 @@ class PaperSearchAgent:
         意图（Step 1）若已由调用方提供则直接复用，否则就地识别一次。
         """
         from ..sources import build_sources, dedupe
+        from ..sources.backfill import backfill_abstracts, drop_non_research
 
         intent = self.intent or self._recognize(idea)
 
@@ -197,6 +198,13 @@ class PaperSearchAgent:
         before = len(papers)
         papers = dedupe(papers)
         print(f"[PaperSearch] 多源合计 {before} 条 → 去重后 {len(papers)} 条")
+
+        # 补摘要、滤非论文 —— 都在打分之前做：
+        #   缺摘要的条目只凭标题打分，几乎必然被丢掉（SSRN 工作论文尤其吃亏）；
+        #   OECD 图表和书籍章节占着 _SCORE_LIMIT 配额，还要花 token 评判。
+        # 实测回填 46%（28 → 11 条仍缺），滤除 6 条，共约 4 秒。
+        backfill_abstracts(papers)
+        papers = drop_non_research(papers)
 
         # LLM 语义打分（传入标题+摘要段落）
         # 只对 relevance 靠前的 _SCORE_LIMIT 篇打分，其余直接丢弃 —— 见该常量注释
