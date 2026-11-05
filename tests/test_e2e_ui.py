@@ -330,3 +330,79 @@ def test_chart_has_axes_in_percent(page):
     m = _re.search(r'viewBox="0 0 (\d+) (\d+)"', svg)
     assert m and int(m.group(1)) / int(m.group(2)) > 5, \
         "viewBox 过窄会导致左右留白"
+
+
+# ── 资料来源与参数出处的可见性 ──────────────────────────────────────────────
+#
+# 这两组断言守的是同一条线：用户必须能分辨「读到的」和「编出来的」。
+# 逻辑测试验证不了徽标到底有没有渲染出来、文案是不是真能看懂，
+# 所以放在真实浏览器里。
+
+def test_spec_card_shows_parameter_provenance(page):
+    """
+    只读摘要时 LLM 给的 lookback 是它自己定的（实测摘要 7 项复现细节命中 0-1）。
+    卡片必须把这件事说出来，否则看起来就像复现了论文。
+    """
+    page.evaluate("""() => {
+        handle({kind:'data',stage:'extract',message:'',payload:{append:false,specs:[
+          {idx:0,factor_name:'from_fulltext',formula:'f',
+           provenance:'fulltext',param_sources:{lookback:'paper'},
+           provenance_note:'已读取 arXiv 全文'},
+          {idx:1,factor_name:'from_abstract',formula:'f',
+           provenance:'abstract',param_sources:{lookback:'default'},
+           provenance_note:'非 arXiv 来源，正文不可获取'}]}});
+        handle({kind:'await_input',stage:'implement',message:'',
+                payload:{next:'run'}});
+    }""")
+    page.wait_for_timeout(300)
+
+    badges = page.evaluate(
+        "() => [...document.querySelectorAll('#sList .prov')]"
+        ".map(e => ({t:e.textContent.trim(), cls:e.className}))")
+    assert len(badges) == 2, f"两个因子都应有来源徽标，实际 {badges}"
+
+    full, abst = badges[0], badges[1]
+    assert "已读全文" in full["t"], full
+    assert "ok" in full["cls"], "读到全文应是肯定态"
+    assert "1 项来自论文" in full["t"], full
+
+    assert "仅摘要" in abst["t"], abst
+    assert "warn" in abst["cls"], "只读摘要必须是警示态，不能和全文一个样"
+    assert "0 项来自论文" in abst["t"] and "1 项为模型设定" in abst["t"], abst
+
+
+def test_spec_badge_survives_missing_fields(page):
+    """老会话或延伸变体没有这些字段，不能因此渲染崩掉。"""
+    page.evaluate("""() => {
+        handle({kind:'data',stage:'extract',message:'',payload:{append:false,
+            specs:[{idx:0,factor_name:'legacy',formula:'f'}]}});
+        handle({kind:'await_input',stage:'implement',message:'',
+                payload:{next:'run'}});
+    }""")
+    page.wait_for_timeout(300)
+    assert page.query_selector("#sList .item"), "缺字段时仍应渲染出卡片"
+    assert not page._errors, f"控制台报错: {page._errors[:3]}"
+
+
+def test_backfilled_abstract_is_labelled(page):
+    """
+    回填来的摘要不是原源给的，要标出来 —— 用户判断可信度时需要知道
+    这条信息是从哪家库查来的。
+    """
+    page.evaluate("""() => {
+        handle({kind:'data',stage:'search',message:'',payload:{page:1,total:2,
+          has_more:false,papers:[
+            {idx:0,title:'原源自带摘要',abstract:'a',source:'arxiv'},
+            {idx:1,title:'跨库回填',abstract:'a',source:'crossref',
+             doc_type:'working_paper',abstract_backfilled:true}]}});
+        handle({kind:'await_input',stage:'select',message:'',
+                payload:{next:'select'}});
+    }""")
+    page.wait_for_timeout(300)
+
+    items = page.evaluate(
+        """() => [...document.querySelectorAll('#pList .item')]
+                 .map(e => e.innerHTML)""")
+    assert len(items) == 2, f"应渲染两条，实际 {len(items)}"
+    assert "摘要回填" not in items[0], "原源自带摘要的不该被标成回填"
+    assert "摘要回填" in items[1], "回填来的必须标出"
