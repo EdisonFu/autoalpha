@@ -27,12 +27,29 @@ def classify_error(error: str) -> str:
         return "SYNTAX"
     if "nameerror" in e or "attributeerror" in e or "importerror" in e or "modulenotfounderror" in e:
         return "RUNTIME"
+    # 结构性误解要排在 DATA 之前。实测一次真实运行：LLM 把
+    # data(dict[股票代码, DataFrame]) 当成 dict[字段名, DataFrame]，
+    # 在 data 里找 "close" 键 → KeyError。归成 DATA 会给它 dropna/
+    # min_periods 的提示，完全不对路，于是三次重试全在原地打转。
+    if "keyerror" in e and any(
+            k in e for k in ("not found", "price data", "data not found",
+                             "close", "open", "high", "low", "volume")):
+        return "STRUCTURE"
     if "keyerror" in e or "valueerror" in e or "indexerror" in e or "typeerror" in e:
         return "DATA"
     return "LOGIC"
 
 
 _REPAIR_HINTS = {
+    "STRUCTURE":
+        "The previous code MISREAD THE INPUT STRUCTURE. `data` maps STOCK CODE "
+        "-> DataFrame (e.g. data['510300'] is that stock's OHLCV frame). It is "
+        "NOT keyed by field name, so data['close'] raises KeyError. "
+        "REWRITE the data-access layer — this is not something dropna() or "
+        "min_periods can fix, and a minimal edit will fail again. "
+        "Iterate `for symbol, df in data.items()` and read df['close'] inside "
+        "the loop, then concat the per-stock Series and stack to "
+        "(date, symbol). Reproduce the skeleton from the generation prompt.",
     "NO_MAIN": "The file is MISSING the required main block. Append EXACTLY this at the end:\n"
                "```python\nimport pickle, sys\n"
                "if __name__ == \"__main__\":\n"
@@ -82,23 +99,39 @@ Requirements:
    to all stocks (e.g. np.tile of a market-level scalar) has zero cross-sectional
    information and will be rejected.
 
-Function signature:
+START FROM THIS SKELETON. It is verified to run against the real data and to
+produce the exact CSV the harness expects. Replace ONLY the marked block with
+your factor logic; keep the data-access pattern, the cross-sectional rank, the
+stack, and the main block intact unless you have a concrete reason to change them.
+
 ```python
 import pandas as pd
 import numpy as np
+import pickle, sys
+
 
 def compute_factor(data: dict) -> pd.Series:
-    # STEP 1 - SIGNAL: ...
-    # STEP 2 - DATA: ...
-    # STEP 3 - PITFALLS: ...
-    # STEP 4 - IMPLEMENTATION:
-    ...
-    return factor_series  # MultiIndex (date, stock_code), name="factor_value"
-```
+    # data maps STOCK CODE -> DataFrame. It is NOT keyed by field name.
+    # data["510300"]["close"] is a price Series; data["close"] raises KeyError.
+    frames = []
+    for symbol, df in data.items():
+        close = df["close"]
+        # STEP 1 - SIGNAL: what does this factor capture, and why does it predict returns?
+        # STEP 2 - DATA: which columns of df does the formula need?
+        # STEP 3 - PITFALLS: lookahead bias, NaN traps, index alignment, min_periods
+        # ==== REPLACE THIS BLOCK WITH YOUR FACTOR LOGIC ====
+        values = close.pct_change(20, fill_method=None)
+        # ==== END OF YOUR LOGIC; `values` must be a Series aligned to df.index ====
+        frames.append(values.rename(symbol))
 
-After the function, add exactly this main block:
-```python
-import pickle, sys
+    wide = pd.concat(frames, axis=1).sort_index()   # rows=date, cols=stock code
+    wide = wide.rank(axis=1, pct=True)              # cross-sectional normalize per date
+    s = wide.stack()
+    s.index.names = ["date", "symbol"]
+    s.name = "factor_value"
+    return s
+
+
 if __name__ == "__main__":
     with open(sys.argv[1], "rb") as f:
         data = pickle.load(f)
@@ -106,6 +139,11 @@ if __name__ == "__main__":
     result.to_csv(sys.argv[2])
     print("FACTOR_OK")
 ```
+
+If the hypothesis is NEGATIVE, negate `values` before the rank. If your factor
+genuinely needs a different assembly (e.g. it combines several fields), keep the
+same output contract: a Series with MultiIndex (date, symbol) named
+"factor_value", written by the main block above.
 
 ENVIRONMENT (%(PD_VER)s) — these APIs were REMOVED or CHANGED:
   - `df.stack(dropna=...)`     → REMOVED. Use `df.stack()` only.
@@ -124,6 +162,9 @@ _REPAIR_SYSTEM = """\
 You are a quantitative developer fixing a broken factor implementation.
 
 Make the MINIMUM changes needed to fix the specific problem described.
+EXCEPTION: when the error type is STRUCTURE the code has misread the input
+layout, and the data-access layer MUST be rewritten — a minimal edit there
+fails again on the next run. Rewrite that layer and keep the factor formula.
 - Do NOT rewrite logic that is not broken
 - Do NOT change the factor's economic meaning or formula structure
 - Fix ONLY what the error message or evaluation feedback indicates
@@ -229,6 +270,21 @@ class FactorImplementAgent:
         for df in list(data.values())[:3]:
             available_cols.update(df.columns.tolist())
 
+        # 附上真实数据形状。实测 LLM 把 dict[股票代码, df] 理解成
+        # dict[字段名, df]，凭 prompt 的文字描述纠不过来；给出具体的 key
+        # 与列名后它才有判断依据。只在有数据时附加。
+        shape_line = ""
+        if data:
+            k0 = next(iter(data))
+            df0 = data[k0]
+            shape_line = (
+                f"ACTUAL INPUT SHAPE (verified, not guessed): "
+                f"data is dict with {len(data)} entries; "
+                f"data[{k0!r}] is a DataFrame of shape {getattr(df0, 'shape', '?')} "
+                f"indexed by {type(getattr(df0, 'index', None)).__name__}, "
+                f"columns={list(getattr(df0, 'columns', []))}. "
+                f"So the close prices of that stock are data[{k0!r}]['close']. "
+                f"There is NO data['close'].")
         base_parts = [
             f"Factor name: {spec.factor_name}",
             f"Description: {spec.description}",
@@ -239,6 +295,8 @@ class FactorImplementAgent:
             f"Available data columns: {sorted(available_cols)}",
             f"Number of stocks in data: {len(data)}",
         ]
+        if shape_line:
+            base_parts.append(shape_line)
 
         if error_context:
             # Repair mode: targeted prompt + low temperature（来自 BrainAlpha T=0.3 设计）
