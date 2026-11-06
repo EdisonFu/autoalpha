@@ -101,6 +101,8 @@ class MoreReq(BaseModel):
 class RunReq(BaseModel):
     session_id: str
     spec_indices: Optional[List[int]] = None
+    # 可选：用户对延伸方向的补充描述（留空走默认延伸）
+    notes: Optional[str] = None
 
 
 def _pump(sid: str, gen_factory):
@@ -240,9 +242,13 @@ def run(req: RunReq):
 
     def _gen():
         yield from orch.run_factors(sess, req.spec_indices)
-        # 评估完直接进入反思：auto research 是 loop，不是跑完就结束。
-        # reflect_round 会记账并给出下一轮方向（含 can_extend）。
-        yield from orch.reflect_round(sess)
+        # 评估完先给延伸入口，不要在这里反思：反思要等 LLM，期间
+        # 「完成」步骤一直转圈，而 can_extend 的 stage_end 是延伸面板的
+        # 唯一触发器 —— 曾在这里直接接 reflect_round，导致延伸面板
+        # 永不出现、用户以为卡死。反思移到延伸完成之后。
+        yield FlowEvent(EventKind.STAGE_END, Stage.DONE, "本轮完成",
+                        {"can_extend": any(e.status == "PASS"
+                                           for e in sess.evaluations)})
 
     if not _spawn(req.session_id, _gen):
         raise HTTPException(409, "上一阶段尚未结束，请稍候")
@@ -257,9 +263,10 @@ def extend(req: RunReq):
     orch = get_orch()
 
     def _gen():
-        yield from orch.run_extensions(sess)
-        yield FlowEvent(EventKind.AWAIT_INPUT, Stage.IMPLEMENT,
-                        "延伸假设已生成，可选择实现", {"next": "run"})
+        yield from orch.run_extensions(sess, notes=req.notes)
+        # 延伸结果出来后再反思：此时本轮全部结局（含延伸变体）都在，
+        # 反思给出的下一轮方向才完整。
+        yield from orch.reflect_round(sess)
 
     if not _spawn(req.session_id, _gen):
         raise HTTPException(409, "上一阶段尚未结束，请稍候")

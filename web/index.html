@@ -1051,6 +1051,11 @@ function showExtend(){
       （参数变体 / 公式变体 / 与正交因子组合），并逐个过同一套双层门控。
       变体之间会做多样性过滤，避免只是换个参数名。</div>
     <div id="eList" style="margin-top:12px"></div>
+    <div style="margin-top:12px">
+      <div class="kvlabel">延伸方向（可选）</div>
+      <input id="extNotes" type="text" placeholder="留空走默认（参数/公式/组合变体）；填了会按你的方向引导延伸"
+             style="width:100%;margin-top:5px">
+    </div>
     <div class="actions">
       <button data-act="extend" onclick="doExtend()">开始延伸探索</button>
       <button class="ghost" onclick="selE.clear();drawExtend()">全不选</button>
@@ -1103,10 +1108,11 @@ function showExtVariants(list){
 }
 async function doExtend(){
   if(!selE.size){log('请先选择要延伸的因子','err');return}
-  log('延伸探索：基于 '+[...selE].join('、'));
+  const notes=($('extNotes')?.value||'').trim();
+  log('延伸探索：基于 '+[...selE].join('、')+(notes?`（方向：${notes}）`:''));
   if(window.__demo){ await playExtendDemo(); return; }
   await fetch('/api/extend',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({session_id:SID,factors:[...selE]})});
+    body:JSON.stringify({session_id:SID,factors:[...selE],notes:notes||null})});
 }
 
 // ── 数据源配置 ──────────────────────────────────────────────────────────

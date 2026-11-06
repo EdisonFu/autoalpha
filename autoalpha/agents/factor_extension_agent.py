@@ -46,7 +46,8 @@ class FactorExtensionAgent:
     def __init__(self, llm: LLMClient):
         self.llm = llm
 
-    def propose_extensions(self, spec: FactorSpec, result: FactorResult) -> List[FactorSpec]:
+    def propose_extensions(self, spec: FactorSpec, result: FactorResult,
+                           user_notes: str = "") -> List[FactorSpec]:
         print(f"[Extension] 为因子 '{spec.factor_name}' 生成延伸假设...")
         user_msg = (
             f"Base factor: {spec.factor_name}\n"
@@ -57,6 +58,15 @@ class FactorExtensionAgent:
             f"Source paper: {spec.source_paper.get('title','')}\n\n"
             f"Propose 3-5 extensions that are structurally diverse (not just parameter changes)."
         )
+        # 用户补充的延伸方向。留空走默认（参数/公式/组合变体）；
+        # 填了就按用户意图引导，但仍要求结构多样、能过同一套门控。
+        if (user_notes or "").strip():
+            user_msg += (
+                "\n\nUser-provided direction for the extensions (in Chinese):\n"
+                + user_notes.strip()[:800]
+                + "\nFollow this direction when choosing which variants to propose; "
+                  "still keep them structurally diverse and computable from daily OHLCV."
+            )
         try:
             raw = self.llm.complete(system=_EXT_SYSTEM, user=user_msg,
                                     purpose="extension")

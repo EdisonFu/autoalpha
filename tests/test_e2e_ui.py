@@ -473,3 +473,59 @@ def test_research_box_toggles_and_prefills_query(page):
     assert page.input_value("#reQuery") == "cross-sectional momentum ETF", \
         "应预填当前检索式"
     assert not page._errors
+
+
+# ── 评估完成后的延伸入口（真实 bug 回归）─────────────────────────────────
+
+def test_evaluation_done_shows_extension_panel_without_spinner(page):
+    """
+    回归：/api/run 曾直接接 reflect_round，去掉了带 can_extend 的
+    stage_end(done) —— 而 showExtend 只认那个事件，于是延伸面板永不出现，
+    「完成」步骤因反思的 LLM 调用一直转圈，用户以为卡死。
+    """
+    page.evaluate("""() => {
+        // 要先有一个 PASS 因子：showExtend 对空通过集显示空态，
+        // 不渲染因子列表（那是另一条分支）
+        handle({kind:'data',stage:'evaluate',message:'',payload:{evaluation:{
+          factor_name:'mom',status:'PASS',fail_reason:'',description:'d',
+          zh_what:'衡量动量',is_ic:{ic_tstat:3.1},
+          is_layers:{monotonicity:0.9,long_short:{sharpe_net:0.7}},
+          oos_ic:null,oos_layers:null,nav:[]}}});
+        handle({kind:'stage_end',stage:'evaluate',
+                message:'完成：1/1 通过双层门控',payload:{usage:{}}});
+        handle({kind:'stage_end',stage:'done',message:'本轮完成',
+                payload:{can_extend:true}});
+    }""")
+    page.wait_for_timeout(400)
+
+    assert page.query_selector("#pExt"), "延伸面板必须出现"
+    assert page.query_selector("#eList"), "要有可勾选的因子列表"
+    # 步骤条上 evaluate / done 都不该是 active 转圈态
+    spinning = page.evaluate(
+        "() => [...document.querySelectorAll('.step.active')].map(e => e.textContent.trim())")
+    assert not spinning, f"评估结束后不应有步骤在转圈: {spinning}"
+
+    # 可选的延伸方向输入框：留空走默认，填了按用户方向引导
+    assert page.query_selector("#extNotes"), "要有可选的延伸方向输入框"
+
+
+def test_extension_panel_offers_description_and_select(page):
+    """用户应能勾选通过因子、看到描述、并可选择性补充延伸方向。"""
+    page.evaluate("""() => {
+        handle({kind:'data',stage:'evaluate',message:'',payload:{evaluation:{
+          factor_name:'mom',status:'PASS',fail_reason:'',
+          description:'d',zh_what:'衡量60日动量',
+          is_ic:{ic_tstat:3.1},is_layers:{monotonicity:0.9,
+            long_short:{sharpe_net:0.7}},
+          oos_ic:null,oos_layers:null,nav:[]}}});
+        handle({kind:'stage_end',stage:'evaluate',message:'',payload:{}});
+        handle({kind:'stage_end',stage:'done',message:'',
+                payload:{can_extend:true}});
+    }""")
+    page.wait_for_timeout(400)
+    html = page.inner_html("#pExt")
+    assert "mom" in html
+    assert "衡量60日动量" in html, "要显示因子描述，用户才知道在延伸什么"
+    assert page.query_selector("#extNotes")
+    page.fill("#extNotes", "希望降低换手")
+    assert page.input_value("#extNotes") == "希望降低换手"

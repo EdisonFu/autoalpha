@@ -543,7 +543,8 @@ class FlowOrchestrator:
 
     # ── 阶段 6：延伸 ───────────────────────────────────────────────────────
 
-    def run_extensions(self, sess: FlowSession) -> Iterator[FlowEvent]:
+    def run_extensions(self, sess: FlowSession,
+                       notes: str = "") -> Iterator[FlowEvent]:
         base = [e for e in sess.evaluations if e.status == "PASS"]
         if not base:
             yield sess.record(FlowEvent(EventKind.LOG, Stage.EXTEND,
@@ -556,7 +557,8 @@ class FlowOrchestrator:
             if spec is None:
                 continue
             try:
-                exts = self.extension.propose_extensions(spec, _db_row(ev))
+                exts = self.extension.propose_extensions(
+                    spec, _db_row(ev), user_notes=notes)
             except Exception as e:
                 yield sess.record(FlowEvent(EventKind.LOG, Stage.EXTEND,
                                             f"延伸生成失败: {e}"))
