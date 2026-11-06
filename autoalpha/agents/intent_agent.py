@@ -31,6 +31,7 @@ direction (often informal, often Chinese) into a structured search intent.
 Output ONLY this JSON object:
 {
   "canonical_en": "the single best English academic phrasing of this topic",
+  "canonical_zh": "中文检索式：空格分隔的中文关键词，如 \"ETF 截面动量 轮动\"",
   "aliases": ["3-5 alternative phrasings used in the literature"],
   "market": "china_a|hk|us|japan|europe|global|unknown",
   "asset_class": "equity|etf|bond|commodity|crypto|fx|multi|unknown",
@@ -56,6 +57,12 @@ Rules:
   Use "unknown" only when nothing in the input suggests a market.
 - aliases should be genuinely different phrasings (synonyms, related
   methodology names), not trivial word reorderings. They widen recall.
+- canonical_zh is NOT a copy of the user input. It is the query you would
+  type into a Chinese broker-research portal (券商研报库): 2-4 keywords
+  separated by spaces, using the terminology Chinese analysts actually use
+  —— "ETF 截面动量 轮动" rather than a literal sentence, "指数增强 因子"
+  rather than "如何提升超额收益". Include the asset and the mechanism;
+  drop filler words and vague intentions.
 - doc_preference: choose "practitioner" when the user signals wanting
   real-world/industry work (实务, 业界, 研报, 能落地, 实盘);
   "academic" for method/theory questions; "both" when unclear.
@@ -86,6 +93,9 @@ MARKET_LABEL = {
 @dataclass
 class SearchIntent:
     canonical_en: str = ""
+    # 中文检索式。静态词典匹配只能认出已收录的术语，用户换个说法就漏；
+    # 让 LLM 在识别意图时直接产出，不额外增加调用。
+    canonical_zh: str = ""
     aliases: List[str] = field(default_factory=list)
     market: str = "unknown"
     asset_class: str = "unknown"
@@ -185,6 +195,7 @@ class IntentAgent:
 
         return SearchIntent(
             canonical_en=str(d.get("canonical_en") or raw).strip(),
+            canonical_zh=str(d.get("canonical_zh") or "").strip(),
             aliases=[str(a).strip() for a in aliases if str(a).strip()][:6],
             market=str(d.get("market") or "unknown"),
             asset_class=str(d.get("asset_class") or "unknown"),

@@ -284,7 +284,11 @@ class JoinQuantSource(PaperSource):
         self.pages = pages
 
     def search(self, intent, limit: int = 20) -> List[Dict]:
-        kws = zh_keywords(intent)
+        kws = [k for k in zh_keywords(intent)
+               # LIKE 匹配整串短语（「ETF 截面动量 轮动」）在正文里
+               # 几乎不会原样出现，只会让这条 OR 条件永远落空。
+               # 长检索式交给支持短语的券商研报接口，社区帖用单词。
+               if " " not in k.strip()]
         if not kws:
             # 没有中文关键词就不该返回整库 —— 那不是「相关」，是噪声
             return []

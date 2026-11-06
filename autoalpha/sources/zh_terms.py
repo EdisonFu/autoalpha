@@ -49,15 +49,34 @@ def zh_keywords(intent, limit: int = 6) -> List[str]:
     """
     返回用于中文资料检索的词，按信息量排序（长词优先）。
 
+    三个来源，按可靠度：
+      1. intent.canonical_zh —— LLM 在意图识别时产出的中文检索式，
+         能覆盖词典收不到的表述（「动量崩溃」「北向资金流」）。
+         空格分隔，整串可直接给支持短语的接口（券商研报库），
+         拆开的词给 LIKE 匹配的本地库（社区帖）。
+      2. 词典匹配 —— 在用户输入上找已收录术语。canonical_zh 缺失时
+         这是唯一来源，但它认不出没收录的说法。
+      3. 因子族/资产类别映射 —— 用户没明说时补上对应中文术语。
+
     没有命中时返回空列表 —— 调用方应据此跳过中文源，
     而不是用空词把整库当成「相关」返回。
     """
+    found: List[str] = []
+
+    zh = (getattr(intent, "canonical_zh", "") or "").strip()
+    if zh:
+        # 整串短语优先（给支持短语的源），拆词次之（给 LIKE 匹配）
+        if " " in zh:
+            found.append(zh)
+        for w in zh.split():
+            w = w.strip()
+            if w and w not in found:
+                found.append(w)
+
     text = " ".join(filter(None, [
         getattr(intent, "raw_input", "") or "",
         getattr(intent, "restated_zh", "") or "",
     ]))
-
-    found: List[str] = []
     for term in CN_TERMS:
         if term in text and term not in found:
             found.append(term)
@@ -69,6 +88,7 @@ def zh_keywords(intent, limit: int = 6) -> List[str]:
         if asset not in found:
             found.append(asset)
 
-    # 长词信息量大：「指数增强」比「指数」更能定位到想要的内容
-    found.sort(key=lambda t: (-len(t), t))
+    # 长词信息量大：「指数增强」比「指数」更能定位到想要的内容。
+    # canonical_zh 整串始终排最前（信息量最大），其它按长度。
+    found.sort(key=lambda t: (0 if t == zh else 1, -len(t), t))
     return found[:limit]

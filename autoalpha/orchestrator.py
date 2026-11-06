@@ -677,6 +677,7 @@ class FlowOrchestrator:
         new_intent = replace(
             base,
             canonical_en=nxt["canonical_en"],
+            canonical_zh=(nxt.get("canonical_zh") or "").strip(),
             aliases=[a for a in (base.aliases or [])
                      if a.lower() != nxt["canonical_en"].lower()][:3],
             restated_zh=direction,

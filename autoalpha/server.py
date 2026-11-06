@@ -194,6 +194,10 @@ def search(req: IntentReq):
         for k, v in req.intent.items():
             if hasattr(sess.intent, k) and v not in (None, "", []):
                 setattr(sess.intent, k, v)
+        # canonical_zh 留空表示用户清空了中文检索式（不再查中文源），
+        # 与其它字段「留空=保持原值」的语义不同，需要显式处理。
+        if "canonical_zh" in req.intent:
+            sess.intent.canonical_zh = (req.intent["canonical_zh"] or "").strip()
         orch.paper_search.intent = sess.intent
         orch.paper_search._results_cache.pop(sess.idea, None)   # 意图变了要重查
 

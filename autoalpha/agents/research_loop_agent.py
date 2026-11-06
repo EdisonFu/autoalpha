@@ -34,6 +34,7 @@ Output a JSON object:
   "learned": "2-4 sentences: what this round actually established, in Chinese",
   "next_direction_zh": "one concrete research direction for the next round, in Chinese",
   "canonical_en": "a precise English academic search query for that direction",
+  "canonical_zh": "对应的中文检索式，空格分隔的中文关键词，如 \"低波动 动量 择时\"",
   "avoid": ["specific thing to avoid next round", "..."],
   "rationale": "why this direction follows from the failures, 1-2 sentences"
 }
@@ -52,6 +53,10 @@ Rules:
 - Never propose the identical query that was just used.
 - canonical_en must be a real bibliographic query: 3-8 words, standard academic
   terminology, no Chinese.
+- canonical_zh uses the terminology Chinese analysts actually use, so the next
+  round also searches broker research reports and quant community posts.
+  It must follow the same direction as canonical_en and respect the same
+  avoid-list (e.g. if only price/volume is available, do not write 宏观 or 基本面).
 """
 
 

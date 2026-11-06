@@ -49,12 +49,12 @@ Step 2 search     多源召回 + 跨源去重 + 回填摘要 + 滤非研究条�
 
 | 模块 | 职责 |
 |---|---|
-| `agents/intent_agent.py` | Step 1，输出 `SearchIntent` |
+| `agents/intent_agent.py` | Step 1，输出 `SearchIntent`（含 canonical_en/zh 双语检索式） |
 | `sources/` | 各检索源适配 + 跨源去重，统一 schema |
 | `sources/fulltext.py` | arXiv 全文抓取 + 方法论章节抽取（可选 pypdf） |
 | `sources/backfill.py` | 跨库补摘要（OpenAlex↔Crossref）+ 滤非研究条目 |
 | `sources/joinquant.py` | 聚宽中文社区：抓列表+正文入 SQLite，本地中文检索 |
-| `sources/zh_terms.py` | 中文领域术语提取（词典匹配，不用分词） |
+| `sources/zh_terms.py` | 中文检索词组装：优先 intent.canonical_zh，词典兜底 |
 | `sources/fxbaogao.py` | 发现报告中文券商研报：真关键词搜索、免认证 |
 | `sources/feeds.py` | RSS 灵感池（独立于主链路） |
 | `metrics.py` | 指标容器，字段名自带口径 |

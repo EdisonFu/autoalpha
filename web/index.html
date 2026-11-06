@@ -783,8 +783,14 @@ function showIntent(editable){
   panel('pIntent',`<h3>Step 1 · 研究意图 <span class="badge">置信度 ${conf}%</span></h3>
     ${i.restated_zh?`<div class="zh"><b>理解为</b>${esc(i.restated_zh)}</div>`:''}
     <div style="margin-top:10px">
-      <div class="kvlabel">检索式（可改）</div>
+      <div class="kvlabel">英文检索式（可改 · 用于 arXiv / OpenAlex / Crossref）</div>
       <input id="canonEn" type="text" value="${esc(i.canonical_en)}"
+             style="width:100%;margin-top:5px">
+    </div>
+    <div style="margin-top:9px">
+      <div class="kvlabel">中文检索式（可改 · 用于券商研报与社区帖）</div>
+      <input id="canonZh" type="text" value="${esc(i.canonical_zh||'')}"
+             placeholder="如：ETF 截面动量 轮动"
              style="width:100%;margin-top:5px">
     </div>
     ${i.aliases&&i.aliases.length?`<div style="margin-top:9px">
@@ -807,6 +813,8 @@ function showIntent(editable){
 async function startSearch(){
   const el=$('canonEn');
   const patch=el?{canonical_en:el.value.trim()}:{};
+  const zh=$('canonZh');
+  if(zh)patch.canonical_zh=zh.value.trim();
   const srcs=[...document.querySelectorAll?.('.srcck')||[]];
   log('开始多源检索：'+(patch.canonical_en||''));
   await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},
