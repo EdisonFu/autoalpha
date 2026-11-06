@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "docs", "screenshots")

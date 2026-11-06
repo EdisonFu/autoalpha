@@ -1,8 +1,7 @@
 import sqlite3
 import json
-import os
 from datetime import datetime
-from typing import List, Optional, Dict
+from typing import List, Dict
 
 
 class FactorDB:

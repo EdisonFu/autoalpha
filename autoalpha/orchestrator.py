@@ -17,12 +17,12 @@ import pandas as pd
 
 from .flow import (
     Stage, EventKind, FlowEvent, FlowSession,
-    evaluation_to_dict, nav_to_points,
+    evaluation_to_dict,
 )
 from .llm import LLMClient
 from .db import FactorDB
-from .engine import SplitEngine, DATA_START, DATA_END
 from .data_loader import load_klines
+from .engine import SplitEngine
 from .universe import (load_names, build_universe, describe_for_prompt,
                        DEFAULT_PRESET)
 from .agents.input_classifier import classify_input
@@ -34,7 +34,11 @@ from .agents.translate_agent import TranslateAgent
 from .agents.intent_agent import IntentAgent
 from .agents.research_loop_agent import ResearchLoopAgent
 
-DEFAULT_KLINES = "/Users/fuzhendong/GolandProjects/quant/factor-signal/data/klines"
+# 默认读项目内 data/klines（仓库附沪深300ETF样例数据）。
+# 调用方（server.py / main.py）会先查 AUTOALPHA_KLINES 环境变量，
+# 此处只是最后的回退 —— 此前硬编码本机绝对路径，别人 clone 下来
+# 不设环境变量时拿到的是死路径。
+DEFAULT_KLINES = "./data/klines"
 MAX_IMPLEMENT_RETRIES = 2
 
 # 因子形状不可用时给 LLM 的修复提示。串行与并发两条实现路径共用，
@@ -158,7 +162,7 @@ class FlowOrchestrator:
                 # 累积而非替换：sess.papers 是「已加载的全部论文」，
                 # 与前端列表保持同一语义。此前第 2 批会覆盖第 1 批，
                 # 导致 /api/session 的 n_papers 只报最后一批的数量。
-                seen = {id(x) for x in sess.papers}
+                {id(x) for x in sess.papers}
                 known = {(x.get("title"), x.get("pdf_url")) for x in sess.papers}
                 sess.papers = sess.papers + [
                     p for p in papers
@@ -914,7 +918,7 @@ def _db_row(ev):
     """FactorEvaluation → 旧 FactorResult 形状，供 db / extension agent 复用。"""
     from .pipeline_state import FactorResult
     ic = ev.oos_ic or ev.is_ic
-    lm = ev.oos_layers or ev.is_layers
+    ev.oos_layers or ev.is_layers
     return FactorResult(
         factor_name=ev.factor_name,
         ic_mean=ic.ic_mean_1d if ic else 0.0,

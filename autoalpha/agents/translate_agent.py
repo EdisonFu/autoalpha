@@ -6,12 +6,10 @@
 （见 docs/TOKEN_COST.md）。失败时优雅降级：返回空概述，不阻断流水线。
 """
 
-import json
 from typing import Dict, List
 
 from ..llm import LLMClient
 from ..json_repair import loads_lenient, JSONRepairError
-from ..utils import strip_code_fence
 
 _PAPER_SYSTEM = """\
 你是量化金融研究助理。给定若干英文论文的标题与摘要，为每篇生成中文概述。

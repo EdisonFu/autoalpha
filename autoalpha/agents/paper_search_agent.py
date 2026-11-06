@@ -1,15 +1,11 @@
-import json
-import math
 import re
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 from ..llm import LLMClient
-from ..json_repair import loads_lenient, JSONRepairError
-from ..utils import strip_code_fence
+from ..json_repair import loads_lenient
 
-# arXiv 每次最多拉取的论文数
 # 去掉 abs: 关键词过滤后召回更宽，适当多拉一些由 LLM 语义过滤
 _PREFETCH = 200
 

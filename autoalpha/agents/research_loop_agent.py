@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Dict, List, Optional
 
 from ..json_repair import JSONRepairError, loads_lenient
@@ -128,7 +127,7 @@ class ResearchLoopAgent:
             f"Query used this round: {getattr(intent, 'canonical_en', '')}",
             f"Market: {getattr(intent, 'market', 'unknown')}",
             f"Available data: daily OHLCV for Chinese A-share ETFs ONLY. "
-            f"No fundamentals, no macro, no news, no VIX.",
+            "No fundamentals, no macro, no news, no VIX.",
             "",
             f"PASSED ({len(summary['passed'])}): "
             + (", ".join(summary["passed"]) or "none"),

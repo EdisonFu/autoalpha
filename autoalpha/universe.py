@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 # 分类关键词。顺序敏感：先匹配的优先（如「可转债」归 bond 而非 equity）
 _RULES = [

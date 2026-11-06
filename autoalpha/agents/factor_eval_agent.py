@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from typing import Optional
 from ..pipeline_state import FactorSpec, FactorResult
 
 # Quality gates (from CLAUDE.md)

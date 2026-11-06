@@ -1,5 +1,4 @@
-"""
-Step 1：意图识别。
+"""Step 1：意图识别。
 
 把用户的自然语言输入归一成结构化检索意图，供 Step 2 的多源检索使用。
 
@@ -17,9 +16,8 @@ Step 1：意图识别。
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field, asdict
-from typing import List, Optional
+from typing import List
 
 from ..llm import LLMClient
 from ..json_repair import loads_lenient, JSONRepairError

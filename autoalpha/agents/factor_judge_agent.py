@@ -1,8 +1,7 @@
 import json
 from ..llm import LLMClient
 from ..pipeline_state import FactorSpec, FactorResult
-from ..json_repair import loads_lenient, JSONRepairError
-from ..utils import strip_code_fence
+from ..json_repair import loads_lenient
 
 _JUDGE_SYSTEM = """\
 You are a senior quantitative researcher conducting peer review of an alpha factor.

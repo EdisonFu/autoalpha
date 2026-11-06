@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import urllib.parse
-from typing import Dict, Iterable, List, Set
+from typing import Dict, List
 
 from .base import CONTACT, PaperSource
 from .openalex import _rebuild_abstract

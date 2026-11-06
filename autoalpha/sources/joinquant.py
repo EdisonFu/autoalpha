@@ -32,7 +32,6 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor

@@ -1,6 +1,5 @@
 import os
 from datetime import datetime
-from typing import List
 from ..pipeline_state import FactorReport, FactorResult
 from .factor_eval_agent import GATES
 

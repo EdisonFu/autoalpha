@@ -8,7 +8,7 @@
 （[2608.27734] 实测：泄漏 oracle 打出 Sharpe 35，完整通过 DSR 与 PBO）。
 """
 
-from typing import Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 import pandas as pd

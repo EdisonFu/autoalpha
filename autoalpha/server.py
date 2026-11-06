@@ -528,7 +528,6 @@ def data_dir_set(req: KlinesDirReq):
 
 def _reset_data_cache():
     """换了数据目录，已加载的行情与切分必须作废。"""
-    global _orch
     with _lock:
         if _orch is not None:
             _orch.klines_dir = os.environ.get("AUTOALPHA_KLINES", DEFAULT_KLINES)

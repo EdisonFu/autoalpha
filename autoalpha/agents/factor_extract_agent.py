@@ -1,10 +1,7 @@
-import json
-import re
 from typing import List
 from ..llm import LLMClient
 from ..pipeline_state import FactorSpec
 from ..json_repair import loads_lenient, JSONRepairError
-from ..utils import strip_code_fence
 
 _EXTRACT_SYSTEM = """\
 You are a quantitative finance researcher. Given a paper's title and its text

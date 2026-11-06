@@ -1,9 +1,7 @@
-import json
 from typing import List
 from ..llm import LLMClient
 from ..pipeline_state import FactorSpec, FactorResult
 from ..json_repair import loads_lenient, JSONRepairError
-from ..utils import strip_code_fence
 
 _EXT_SYSTEM = """\
 You are a quantitative researcher proposing factor extensions.
