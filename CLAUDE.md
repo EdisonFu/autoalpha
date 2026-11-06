@@ -197,6 +197,17 @@ auto research 是 loop：每轮结束由 `research_loop_agent` 读失败原因�
 曾因服务端日志里没有某条消息就断定「并发没触发」。
 那是 `FlowEvent`（走 SSE），本来就不落在 stdout。证据来源用错了。
 
+### 批量清理 import：不要用行号驱动的手写脚本
+
+一次清理把文件搞坏三轮：行号在删除中漂移（删了 `load_klines`、
+多行 import 的首行导致 IndentationError）、空行被 `replace("\n","")`
+删成粘连行（`import sqlite3import json`）。全部回滚重来。
+
+→ 用 autoflake，且每轮跑 pyflakes 验证。**它也会误删**（`load_klines`
+被删过一次，虽在使用中），所以删完必须 import + pytest 双验证。
+pyflakes 不报语法错误，多行 import 被删首行时它「没发现任何问题」，
+直到 import 那一刻才炸。
+
 ### 截断若按源顺序，后接入的源会被系统性砍掉
 
 `dedupe()` 保留首次出现顺序，即 `build_sources()` 的顺序。

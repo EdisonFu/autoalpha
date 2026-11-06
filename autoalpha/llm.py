@@ -23,7 +23,7 @@ class OutputTruncatedError(RuntimeError):
 
     单列一类是因为它的表现极具迷惑性：推理模型预算耗尽时返回的是**空字符串**
     而不是异常，下游只看到「JSON 解析失败」或「提取到 0 个因子」，
-    真因（预算不够）完全不可见。实测 deepseek-v4.1-flash 在 1200 预算下
+    真因（预算不够）完全不可见。实测某款轻量推理模型在 1200 预算下
     reasoning 吃满 1200、content 0 字节、finish_reason=length。
     """
 
