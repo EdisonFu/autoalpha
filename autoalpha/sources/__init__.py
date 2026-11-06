@@ -5,15 +5,17 @@ from .arxiv import ArxivSource
 from .openalex import OpenAlexSource
 from .crossref import CrossrefSource
 from .joinquant import JoinQuantSource
+from .fxbaogao import FxBaoGaoSource
 
 # 默认启用的源。界面上可逐个开关。
-DEFAULT_SOURCES = ("arxiv", "openalex", "crossref", "joinquant")
+DEFAULT_SOURCES = ("arxiv", "openalex", "crossref", "joinquant", "fxbaogao")
 
 _REGISTRY = {
     "arxiv": ArxivSource,
     "openalex": OpenAlexSource,
     "crossref": CrossrefSource,
     "joinquant": JoinQuantSource,
+    "fxbaogao": FxBaoGaoSource,
 }
 
 

@@ -55,6 +55,7 @@ Step 2 search     多源召回 + 跨源去重 + 回填摘要 + 滤非研究条�
 | `sources/backfill.py` | 跨库补摘要（OpenAlex↔Crossref）+ 滤非研究条目 |
 | `sources/joinquant.py` | 聚宽中文社区：抓列表+正文入 SQLite，本地中文检索 |
 | `sources/zh_terms.py` | 中文领域术语提取（词典匹配，不用分词） |
+| `sources/fxbaogao.py` | 发现报告中文券商研报：真关键词搜索、免认证 |
 | `sources/feeds.py` | RSS 灵感池（独立于主链路） |
 | `metrics.py` | 指标容器，字段名自带口径 |
 | `backtest.py` | 分层组合、净值、换手、扣费 |
@@ -216,6 +217,12 @@ auto research 是 loop：每轮结束由 `research_loop_agent` 读失败原因�
 另外 `listV2` 的 `keyword`/`title` 参数**被服务端忽略**：
 传「动量」「低波动」「小市值」返回完全相同的列表。所以它只能
 「抓入库 → 本地筛」，不能当实时检索源。东财 `/report/jg` 同样如此。
+
+**发现报告（fxbaogao）是例外**：它的 `searchNoAuth` 接口真正支持关键词，
+但参数名是 `keywords`（复数）。试过 `keyword`/`title`/`q`/`searchKey`
+全部静默忽略（返回同一个默认列表，看起来「能查」其实没生效）。
+响应里 `paragraphObjs` 是语音转写不是正文，`pdfPath` 需登录签名，
+直接下载 404。别把「有 pdfPath 字段」当成「能拿到全文」。
 
 ### 布局 bug 逃得过逻辑测试
 

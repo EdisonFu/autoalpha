@@ -44,6 +44,7 @@ _DOC_WEIGHT = {
     "thesis":        0.60,
     "book":          0.50,   # 正常会被 drop_non_research 滤掉，留作兜底
     "cn_post":       0.86,   # 中文量化社区帖：贴近 A股实盘，常附可运行代码
+    "cn_report":     0.94,   # 中文券商金工研报：正式量化研究，略低于机构研报
 }
 # 时间项半衰期：3 年前的论文时间得分 0.5，而非线性归一化的近 0
 _RECENCY_HALFLIFE_DAYS = 365 * 3
@@ -296,6 +297,12 @@ class PaperSearchAgent:
 
         # 中文社区帖（聚宽）常附完整可运行的策略代码，可复现性不低于论文。
         # 若只按「是否 arXiv」评分，这些最贴近 A股实盘的资料会被系统性压低。
+        if p.get("doc_type") == "cn_report":
+            # 券商金工研报正文含方法与参数，但 PDF 需登录拿不到，
+            # 所以只给「比摘要强、比全文弱」的中间分
+            score += 0.30
+            if p.get("is_deep"):
+                score += 0.10
         if p.get("doc_type") == "cn_post":
             body = p.get("abstract") or ""
             score += 0.35

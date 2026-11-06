@@ -879,7 +879,7 @@ function drawPapers(){
 function togP(i){selP.has(i)?selP.delete(i):selP.add(i);drawPapers()}
 
 const DOC_LABEL={paper:'期刊论文',report:'研报',working_paper:'SSRN工作论文',
-                 preprint:'预印本',thesis:'学位论文',book:'书籍章节',cn_post:'中文社区'};
+                 preprint:'预印本',thesis:'学位论文',book:'书籍章节',cn_post:'中文社区',cn_report:'券商研报'};
 function srcBadge(p){
   const out=[];
   if(p.doc_type)out.push(`<span class="badge2 dt-${p.doc_type}">${DOC_LABEL[p.doc_type]||p.doc_type}</span>`);
