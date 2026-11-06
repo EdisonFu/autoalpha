@@ -156,6 +156,11 @@ export LLM_MODEL=<model-id>        # 模型 ID
 python main.py --web
 ```
 
+**仓库自带样例行情**（`data/klines/`：沪深300ETF 等 10 只 A股 ETF 日 K），
+clone 后配置好 LLM 即可跑真实流水线，不必先找数据。
+格式说明见 [data/README.md](data/README.md)；要换自己的数据，
+放目录、界面指定目录、或设 `AUTOALPHA_KLINES` 均可。
+
 密钥、模型、数据源都可在页面上配置，不必改环境变量。
 单价由模型 ID 自动识别，不用自己查。
 

@@ -19,13 +19,17 @@ env/
 
 # 数据库 & 输出
 *.db
-output/
+output*/
 reports/
 factors/
 
 # 数据缓存
 data_cache/
-data/
+# data/klines/ 下的样例行情要进仓库（用户 clone 即可跑），只忽略用户自己放的其它数据
+data/*
+!data/README.md
+!data/klines/
+!data/klines/**
 
 # macOS
 .DS_Store
