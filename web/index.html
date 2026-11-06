@@ -127,6 +127,14 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 .zh.rel{background:rgba(124,92,255,.07);border-left-color:var(--acc2);margin-top:5px}
 .zh b{color:var(--acc);font-weight:600;margin-right:6px;font-size:11px}
 /* 参数来源徽标：读全文(绿) vs 仅摘要(琥珀)。摘要意味着数值多半是模型定的。 */
+.mig{margin-top:8px;font-size:11.5px;line-height:1.75}
+.migTag{display:inline-block;padding:2px 8px;border-radius:9px;font-size:10.5px;
+  color:#9ec3f0;background:rgba(79,140,255,.1);border:1px solid rgba(79,140,255,.28)}
+.mig details{margin-top:5px}
+.mig summary{cursor:pointer;color:var(--acc);font-size:11px;user-select:none}
+.mig ul{margin:6px 0 0;padding-left:18px;color:var(--fg2)}
+.mig li{margin-bottom:4px}
+.migNote{margin-top:6px;font-size:10.5px;color:var(--fg2);opacity:.8}
 .prov{display:inline-block;margin-left:8px;padding:2px 7px;border-radius:9px;
   font-size:10.5px;font-weight:500;vertical-align:middle;white-space:nowrap}
 .prov.ok{background:rgba(52,199,123,.13);color:#5fd49a;border:1px solid rgba(52,199,123,.3)}
@@ -926,6 +934,18 @@ function showSpecs(){
     <button class="ghost" onclick="selS.clear();drawSpecs()">全不选</button></div>`);
   drawSpecs();
 }
+function migrationHtml(s){
+  const m=s.migration;
+  if(!m||!m.changes||!m.changes.length)return '';
+  const from=m.source_market?`迁移自 ${esc(m.source_market)} 研究`:'已做市场迁移';
+  const items=m.changes.map(c=>`<li>${esc(c)}</li>`).join('');
+  return `<div class="mig"><span class="migTag">${from}</span>
+    <details><summary>查看替换清单（${m.changes.length} 项）</summary>
+      <ul>${items}</ul>
+      <div class="migNote">箭头右侧是本因子实际使用的数据口径，
+        左侧是原文所用的。阈值等数值若与原文不同，以替换清单为准。</div>
+    </details></div>`;
+}
 function provBadge(s){
   // 读全文还是只读摘要，直接决定参数可不可信 —— 必须摆在卡片上。
   const ps=s.param_sources||{}, keys=Object.keys(ps);
@@ -950,6 +970,7 @@ function drawSpecs(){
       ${zh.length?`<div class="zh">${zh.join('<br>')}</div>`
                  :`<div class="ab">${esc(s.hypothesis||s.description||'')}</div>`}
       ${s.formula?`<div class="me" style="margin-top:5px"><code>${esc(s.formula)}</code></div>`:''}
+      ${migrationHtml(s)}
       </div></div>`}).join('');
 }
 function togS(i){selS.has(i)?selS.delete(i):selS.add(i);drawSpecs()}

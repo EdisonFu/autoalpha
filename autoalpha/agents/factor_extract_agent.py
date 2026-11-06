@@ -31,18 +31,35 @@ Output a JSON array. Each element:
   "parameters": {"lookback": 20},
   "param_sources": {"lookback": "paper"},
   "computable": true,
-  "required_fields": ["close", "volume"]
+  "required_fields": ["close", "volume"],
+  "migration": {
+    "source_market": "us",
+    "changes": ["VIX → 20日已实现波动率(年化)", "SPY → A股ETF截面自身"]
+  }
 }
 
 Rules:
 - Only extract factors that are EXPLICITLY described or implied in the text
 - Translate Chinese abstracts to English terminology
 - If the paper describes a strategy (not a factor), extract the underlying signal as a factor
-- EVERY factor must be computable from the available data listed in the user message.
-  Papers often use data we do not have (US tickers, VIX, news, fundamentals).
-  When that happens, either restate the signal using only available fields, or
-  set "computable": false and explain in implementation_notes. Never invent a proxy
-  and present it as the paper's signal.
+- MARKET MIGRATION IS THE JOB, NOT AN OBSTACLE. The paper may study US markets
+  (SPY, S&P 500, VIX) — your target is Chinese A-share ETFs with daily OHLCV.
+  The economic mechanism (momentum, reversal, low-volatility, turnover effects)
+  is market-agnostic. Standard substitutions, and these are well-established
+  practice, not hacks:
+    VIX / implied volatility  → realized volatility from daily closes (annualized)
+    SPY / S&P 500 index       → the A-share ETF cross-section itself
+    size / market cap         → skip this leg (ETF universe has no cap data)
+  Record every substitution in "migration": {"source_market": "...",
+  "changes": ["原数据 → 替代方案", ...]}, in Chinese so users can read it.
+  NEVER set computable=false merely because the paper used US data — that is
+  what migration is for. computable=false is ONLY for signals that genuinely
+  cannot be expressed with daily price/volume at all: news text, order-book
+  microstructure, analyst estimates, quarterly fundamentals. When in doubt,
+  build the migrated version and say so in migration.changes.
+- NEVER invent a proxy and present it as the paper's signal: every substitution
+  must be visible in migration.changes, and implementation_notes must state the
+  original calibration (e.g. "论文阈值 VIX>25，迁移版用已实现波动率>35% 对应").
 - Add a "computable" boolean and a "required_fields" list to each factor.
 - "param_sources": for EVERY key in "parameters", say where the value came from:
   "paper" if the text states it explicitly, "inferred" if the text implies it
@@ -137,6 +154,16 @@ class FactorExtractAgent:
                 spec.param_sources = {
                     k: (v if v in ("paper", "inferred", "default") else "default")
                     for k, v in srcs.items()}
+                # 市场迁移声明。检查器据此豁免文本扫描：迁移版因子在描述
+                # 里提到原文的美股数据是正常的（「论文用 VIX，本版用已实现
+                # 波动率」），不代表本因子需要那些数据。
+                mig = item.get("migration") or {}
+                if isinstance(mig, dict):
+                    spec.migration = {
+                        "source_market": str(mig.get("source_market") or ""),
+                        "changes": [str(c) for c in
+                                    (mig.get("changes") or [])][:8],
+                    }
                 specs.append(spec)
             except Exception as e:
                 print(f"[FactorExtract] FactorSpec 构建失败: {e}")

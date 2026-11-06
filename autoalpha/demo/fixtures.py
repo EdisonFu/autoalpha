@@ -67,7 +67,13 @@ DEMO_SPECS = [
      # 这篇是 arXiv 预印本，读到了全文，窗口长度确实写在正文里
      "provenance": "fulltext",
      "provenance_note": "已读取 arXiv 全文（8438 词，取方法论相关章节 12000 字符）",
-     "param_sources": {"lookback": "paper"}},
+     "param_sources": {"lookback": "paper"},
+     "migration": {
+         "source_market": "us",
+         "changes": [
+             "SPY / S&P 500 成分股 → A股ETF截面自身（每只ETF作为截面个体）",
+             "美股12-1动量窗口 → 252/21 交易日换算",
+             "必须使用复权价：A股ETF分红会造成未复权价的假跳空"]}},
     {"idx": 1, "factor_name": "etf_volume_weighted_momentum",
      "description": "Volume-weighted momentum",
      "hypothesis": "Price moves backed by volume are more likely to persist",
@@ -79,7 +85,15 @@ DEMO_SPECS = [
      # 这篇只有期刊页，正文在登录墙后 —— 窗口是模型自己定的
      "provenance": "abstract",
      "provenance_note": "非 arXiv 来源，正文不可获取（出版商登录墙），仅依据摘要",
-     "param_sources": {"lookback": "default"}},
+     "param_sources": {"lookback": "default"},
+     "migration": {
+         "source_market": "us",
+         "changes": [
+             "VIX（隐含波动率，原文阈值 25/15）→ 21日年化已实现波动率，"
+             "阈值下移至 20%/12%（扣除方差风险溢价）",
+             "市场级 VIX 统一缩放 → 每只ETF自身波动率缩放"
+             "（统一缩放不改变截面排序，会让因子失效）",
+             "美债利率条件腿 → 数据不可得，未纳入"]}},
 ]
 
 DEMO_DATA = {

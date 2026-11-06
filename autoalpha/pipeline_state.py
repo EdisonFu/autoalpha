@@ -24,6 +24,10 @@ class FactorSpec:
     # "default"（模型自己定的）。只读摘要时一律 default —— 摘要几乎不写
     # 回看窗口、分位数这类数字，标成「来自论文」是误导。
     param_sources: Dict = field(default_factory=dict)
+    # 市场迁移声明：{"source_market": "us", "changes": ["VIX → 已实现波动率"]}
+    # 非空表示 LLM 已把原文的方法论迁到了本数据集上 —— 此时因子描述里
+    # 出现原文的美股词是引用原文，不是数据依赖。
+    migration: Dict = field(default_factory=dict)
 
 
 @dataclass

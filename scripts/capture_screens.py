@@ -165,6 +165,13 @@ def main():
                 payload:{next:'run'}});
         }""", SPECS)
         pg.wait_for_timeout(350)
+        # 展开第一个因子的迁移替换清单 —— 这是跨市场迁移最有说服力的部分，
+        # 折叠状态下截图等于把卖点藏起来了。
+        pg.evaluate("""() => {
+            const d=document.querySelector('#sList .mig details');
+            if(d)d.setAttribute('open','');
+        }""")
+        pg.wait_for_timeout(250)
         snap("07-step4-hypotheses", step="extract", panel="#pSpecs")
 
         # 8 回测结果

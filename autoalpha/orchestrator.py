@@ -265,7 +265,9 @@ class FlowOrchestrator:
                         "provenance": sp.provenance,
                         "param_sources": sp.param_sources,
                         "provenance_note": (sp.source_paper or {}).get(
-                            "provenance_note", "")}
+                            "provenance_note", ""),
+                        # 市场迁移声明：用户需要知道哪些是原文、哪些是替换
+                        "migration": sp.migration or {}}
                        for i, sp in enumerate(specs)]}))
         yield sess.record(FlowEvent(EventKind.STAGE_END, Stage.EXTRACT, "提取完成"))
 
@@ -856,19 +858,29 @@ def _check_data_available(spec, available_cols: set) -> Optional[str]:
     if missing:
         return f"需要本数据集不存在的字段: {', '.join(sorted(missing))}"
 
-    blob = " ".join([spec.factor_name, spec.hypothesis, spec.formula,
-                     spec.description]).lower()
-    hits = {t for t in _UNAVAILABLE_TOKENS
-            if re.search(rf"(?<![a-z0-9_]){re.escape(t)}(?![a-z0-9_])", blob)}
-    if hits:
-        # 按类别说明缺什么，而不是只抛一个词 —— 用户需要知道
-        # 是市场不对、粒度不对、还是资产类型不对
-        groups = {}
-        for t in sorted(hits):
-            groups.setdefault(_TOKEN_REASON.get(t, "未采集的数据"), []).append(t)
-        parts = [f"{why}（{', '.join(ts)}）" for why, ts in groups.items()]
-        return ("需要本数据集没有的数据：" + "；".join(parts)
-                + "。本数据集 = 中国A股市场 ETF 的日频 OHLCV")
+    # 已声明市场迁移的因子豁免文本扫描：迁移版在描述里提到原文的美股
+    # 数据是「引用原文」（「论文用 VIX，本版用已实现波动率」），不是
+    # 数据依赖。实测误杀：realized_vol_scaled_momentum（名字就是迁移版）
+    # 因 description 提到 vix 被拒。硬检查只有上面两条 —— required_fields
+    # 与 LLM 自报，它们是结构化的、不会被引用原文误触发。
+    # 未声明迁移仍命中 → 拒绝：这防的是「LLM 偷偷给 VIX 编代理变量」，
+    # 老的教训，扫描必须保留。
+    if not getattr(spec, "migration", {}).get("changes"):
+        blob = " ".join([spec.factor_name, spec.hypothesis, spec.formula,
+                         spec.description]).lower()
+        hits = {t for t in _UNAVAILABLE_TOKENS
+                if re.search(rf"(?<![a-z0-9_]){re.escape(t)}(?![a-z0-9_])", blob)}
+        if hits:
+            # 按类别说明缺什么，而不是只抛一个词 —— 用户需要知道
+            # 是市场不对、粒度不对、还是资产类型不对
+            groups = {}
+            for t in sorted(hits):
+                groups.setdefault(_TOKEN_REASON.get(t, "未采集的数据"), []).append(t)
+            parts = [f"{why}（{', '.join(ts)}）" for why, ts in groups.items()]
+            return ("需要本数据集没有的数据：" + "；".join(parts)
+                    + "。本数据集 = 中国A股市场 ETF 的日频 OHLCV。"
+                    "若该信号可迁移到价格/成交量数据，请在假设里声明迁移"
+                    "（migration.changes），而不是放弃。")
     return None
 
 
