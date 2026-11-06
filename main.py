@@ -14,6 +14,12 @@ if sys.platform != "darwin":
     except ImportError:
         pass
 
+from autoalpha.local_config import load_local_env
+
+# 必须在创建任何 LLM 客户端之前加载本地 .env —— 否则密钥和模型
+# 每次重启都要重配一遍。进程环境变量优先，便于临时覆盖。
+load_local_env(verbose=True)
+
 from autoalpha.pipeline import AutoAlphaPipeline
 from autoalpha.pipeline_state import FactorReport, FactorResult
 from autoalpha.agents.input_classifier import classify_input

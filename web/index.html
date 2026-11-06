@@ -135,6 +135,9 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 .badge2{font-size:10px;padding:2px 7px;border-radius:4px;background:#0d1320;
   border:1px solid var(--line);color:var(--fg2);font-family:var(--mono)}
 .badge2.src{color:var(--acc2);border-color:rgba(124,92,255,.35)}
+.ckline{display:flex;align-items:center;gap:7px;margin-top:10px;
+  font-size:12px;color:var(--fg2);cursor:pointer;user-select:none}
+.ckline input{accent-color:var(--acc);cursor:pointer}
 .badge2.bf{color:#8fa8c8;border-color:rgba(143,168,200,.3);border-style:dashed}
 /* 换检索式重查：与「加载下一批」区分开，后者只是翻页，这个才是换方向 */
 .research{margin-top:12px;padding:12px 14px;border:1px solid var(--line);
@@ -352,8 +355,12 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
       <input id="cfgBase" type="text" placeholder="OpenAI 兼容端点，留空用默认" autocomplete="off">
     </div>
     <div id="cfgPrice" class="dsnote" style="margin-top:4px"></div>
-    <div class="note">配置只存在于当前服务进程，不落盘。重启后需重新设置，
-      或在启动前用 <code>LLM_API_KEY</code> / <code>LLM_MODEL</code> 环境变量。</div>
+    <div class="note">默认只作用于当前进程。勾选「记住配置」会写入项目
+      <code>.env</code>（已 gitignore、权限 600），重启自动加载；
+      也可用启动前的 <code>LLM_API_KEY</code> / <code>LLM_MODEL</code> 环境变量，
+      环境变量优先于文件。</div>
+    <label class="ckline"><input type="checkbox" id="cfgSave">
+      记住配置，下次启动免重填</label>
     <div id="cfgMsg" class="cfgmsg"></div>
     </div>
     <div class="actions">
@@ -1196,6 +1203,7 @@ async function saveCfg(){
   const body={
     model:$('cfgModel').value.trim(),
     base_url:$('cfgBase').value.trim(),
+    save:!!($('cfgSave')&&$('cfgSave').checked),
   };
   const k=$('cfgKey').value.trim();
   if(k)body.api_key=k;
@@ -1209,7 +1217,8 @@ async function saveCfg(){
     if(!r.ok){cfgMsg(j.detail||'保存失败','err');return}
     CFG=j; $('cfgKey').value=''; showPrice(j);
     const d=$('cfgDot'); if(d)d.className='dot on';
-    cfgMsg('已保存，对后续会话生效','ok');
+    cfgMsg(j.saved_to?('已生效，并写入 '+j.saved_to+'（重启免重填）')
+                      :'已保存，对后续会话生效（未写入文件）','ok');
     log('LLM 配置已更新：'+(j.model||''));
   }catch(e){cfgMsg('保存失败：'+e,'err')}
 }

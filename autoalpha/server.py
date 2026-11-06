@@ -331,6 +331,9 @@ class LLMConfigReq(BaseModel):
     base_url: Optional[str] = None
     price_input: Optional[float] = None
     price_output: Optional[float] = None
+    # 用户主动勾选时才落盘。默认仍只写进程内存 —— 保存密钥应是
+    # 一个明确的决定，不是每次改配置的副作用。
+    save: bool = False
 
 
 def _mask(key: str) -> str:
@@ -369,8 +372,8 @@ def llm_config_set(req: LLMConfigReq):
     """
     更新 LLM 配置并重建客户端。
 
-    只写进本进程的环境变量，不落盘：密钥不该被写进仓库或配置文件。
-    重启服务后需要重新设置，或用启动前的环境变量。
+    默认只写进本进程的环境变量。`save=true` 时同时写入项目 `.env`
+    （已 gitignore、权限 600），重启后自动加载，不必每次重配。
     """
     import os as _os
     global _orch
@@ -401,7 +404,23 @@ def llm_config_set(req: LLMConfigReq):
         get_orch()
     except Exception as e:
         raise HTTPException(422, f"配置无法初始化: {e}")
-    return {"ok": True, **llm_config_get()}
+
+    saved_to = ""
+    if req.save:
+        from .local_config import save_project_env
+        values = {"LLM_MODEL": _os.environ.get("LLM_MODEL", "")}
+        for env in ("LLM_API_KEY", "LLM_BASE_URL",
+                    "LLM_PRICE_INPUT", "LLM_PRICE_OUTPUT"):
+            v = _os.environ.get(env)
+            if v:
+                values[env] = v
+        try:
+            saved_to = save_project_env(values)
+        except OSError as e:
+            # 配置已生效，只是没存下来 —— 如实告知，不能假装保存成功
+            raise HTTPException(500, f"配置已生效但写入 .env 失败: {e}")
+
+    return {"ok": True, "saved_to": saved_to, **llm_config_get()}
 
 
 @app.post("/api/llm/test")

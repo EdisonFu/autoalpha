@@ -17,10 +17,14 @@
 ## 跑起来
 
 ```bash
-export LLM_API_KEY=...        LLM_MODEL=<model-id>
-# OpenAI 兼容端点再加 LLM_BASE_URL；成本统计再加 LLM_PRICE_INPUT/OUTPUT
-.venv/bin/python main.py --web --port 8765
+.venv/bin/python main.py --web --port 8765     # 有 .env 时直接起
 ```
+
+首次配置：`cp .env.example .env` 填入 `LLM_API_KEY` / `LLM_MODEL`
+（OpenAI 兼容端点再加 `LLM_BASE_URL`），或在页面「LLM 配置」里填并勾选
+「记住配置」。**进程环境变量 > 项目 `.env` > `~/.autoalpha/.env`**，
+临时换模型用 export，不改文件。
+`.env` 已 gitignore、写入权限 600。推理模型的输出上限见 `llm.max_tokens_for`。
 
 数据默认取 `factor-signal/data/klines`（`AUTOALPHA_KLINES` 可覆盖）。
 计时或冒烟测试用 `scripts/drive_pipeline.py`，别手写 curl 循环（理由见 §踩过的坑）。

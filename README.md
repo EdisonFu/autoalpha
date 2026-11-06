@@ -125,6 +125,18 @@ python main.py --web
 密钥、模型、数据源都可在页面上配置，不必改环境变量。
 单价由模型 ID 自动识别，不用自己查。
 
+**配置可以记住。** 在「LLM 配置」里勾选「记住配置」，或直接
+`cp .env.example .env` 填好。之后重启自动加载，不用每次重填：
+
+```bash
+cp .env.example .env      # 填入 LLM_API_KEY / LLM_MODEL / LLM_BASE_URL
+python main.py --web      # 启动时会打印「已加载本地配置 …/.env」
+```
+
+优先级：**进程环境变量 > 项目 `.env` > `~/.autoalpha/.env`**，
+所以临时换模型直接 `export LLM_MODEL=...` 即可，不必改文件。
+`.env` 已在 `.gitignore` 中、写入时权限设为 `600`，不会进版本控制。
+
 ---
 
 ## 界面一览
