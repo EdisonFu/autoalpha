@@ -138,6 +138,7 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
 .ckline{display:flex;align-items:center;gap:7px;margin-top:10px;
   font-size:12px;color:var(--fg2);cursor:pointer;user-select:none}
 .ckline input{accent-color:var(--acc);cursor:pointer}
+.badge2.best{color:#f0c674;border-color:rgba(240,198,116,.4)}
 .badge2.bf{color:#8fa8c8;border-color:rgba(143,168,200,.3);border-style:dashed}
 /* 换检索式重查：与「加载下一批」区分开，后者只是翻页，这个才是换方向 */
 .research{margin-top:12px;padding:12px 14px;border:1px solid var(--line);
@@ -831,11 +832,12 @@ function showPapers(){
       <div class="rNote">「加载下一批」取的是同一次检索里排名更靠后的，<b>不会更相关</b>。
         资料不对就该换检索式。改完会清空当前列表重新召回、补摘要、重新打分。</div>
       <div class="rRow">
-        <input id="reQuery" type="text" placeholder="英文检索式，如 cross-sectional momentum ETF">
+        <input id="reQuery" type="text" placeholder="检索式，如 cross-sectional momentum ETF">
         <button onclick="doResearch()">重新检索</button>
       </div>
-      <div class="rHint">提示：检索式越规范召回越多（实测同一意图不同表述差 800 倍）。
-        带上市场词，如 <code>Chinese A-share ETF momentum</code>。</div>
+      <div class="rHint">提示：英文检索式越规范召回越多（实测同一意图不同表述差 800 倍），
+        带上市场词如 <code>Chinese A-share ETF momentum</code>。
+        中文社区帖按你最初的研究方向匹配，不随这里的英文检索式变化。</div>
     </div>`);
   drawPapers();
 }
@@ -877,7 +879,7 @@ function drawPapers(){
 function togP(i){selP.has(i)?selP.delete(i):selP.add(i);drawPapers()}
 
 const DOC_LABEL={paper:'期刊论文',report:'研报',working_paper:'SSRN工作论文',
-                 preprint:'预印本',thesis:'学位论文',book:'书籍章节'};
+                 preprint:'预印本',thesis:'学位论文',book:'书籍章节',cn_post:'中文社区'};
 function srcBadge(p){
   const out=[];
   if(p.doc_type)out.push(`<span class="badge2 dt-${p.doc_type}">${DOC_LABEL[p.doc_type]||p.doc_type}</span>`);
@@ -886,6 +888,8 @@ function srcBadge(p){
   const srcs=[p.source,...(p.also_in||[])].filter(Boolean);
   if(srcs.length)out.push(`<span class="badge2 src">${srcs.join(' + ')}</span>`);
   // 原源没有摘要、靠跨库回查补上的 —— 标出来，便于判断信息来源
+  if(p.is_best)out.push(`<span class="badge2 best" title="聚宽社区精华帖">精华</span>`);
+  if(p.collections>0)out.push(`<span class="badge2" title="社区收藏数">收藏 ${p.collections}</span>`);
   if(p.abstract_backfilled)out.push(
     `<span class="badge2 bf" title="原检索源未提供摘要，由另一学术库按 DOI 回查补全">摘要回填</span>`);
   return out.join('');

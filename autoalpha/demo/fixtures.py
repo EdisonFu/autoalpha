@@ -33,6 +33,18 @@ DEMO_PAPERS = [
      "zh_summary": "针对ETF资产动量策略提出改进：引入波动率调整与换手约束，"
                    "降低实盘摩擦成本。",
      "zh_relevance": "实务向，直接讨论换手与成本，对落地性评估很有用。"},
+    {"idx": 3, "title": "单因子有效性分析：分层法、多空组合与各分位数收益",
+     "url": "https://www.joinquant.com/view/community/detail/demo01",
+     "date": "2026-09-18", "source": "joinquant", "venue": "聚宽社区",
+     "doc_type": "cn_post", "citations": 0, "is_best": True, "collections": 103,
+     "abstract": "单因子分析是在挖掘并判断一个因子的好坏。收益分析部分"
+                 "探究这个因子有没有可能赚钱，具体包括分层法、多空组合对冲、"
+                 "各分位数平均收益、最高层减最低层的每日收益差，"
+                 "以及因子值加权多空组合累计收益。附完整分析模板。",
+     "zh_summary": "系统讲解单因子有效性检验流程：分层收益、多空对冲、"
+                   "分位数收益与换手分析，并附可直接套用的分析模板。",
+     "zh_relevance": "与本项目回测层几乎一一对应，可用于核对分层与多空"
+                     "组合的实现口径，也提示IC之外必须看分层单调性。"},
     {"idx": 2, "title": "Factor Momentum and the Momentum Factor",
      "url": "https://www.nber.org/papers/wxxxxx", "date": "2019-01-01",
      "source": "openalex", "venue": "National Bureau of Economic Research",

@@ -125,6 +125,15 @@ def main():
         pg.wait_for_timeout(350)
         snap("04-step1-intent", step="intent", panel="#pIntent")
 
+        # 演示横幅会遮住卡片标题；重查表单若被前面的操作展开也要收起，
+        # 否则截图呈现的就不是用户实际看到的默认状态。
+        pg.evaluate("""() => {
+            document.querySelectorAll('.demobar')
+                .forEach(e => e.style.display='none');
+            const b=document.querySelector('#researchBox');
+            if(b)b.classList.add('hidden');
+        }""")
+
         # 5 Step2 多源检索
         pg.evaluate("""(d) => {
             handle({kind:'stage_start',stage:'search',message:'多源检索',payload:{}});

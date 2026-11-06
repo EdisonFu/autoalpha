@@ -63,7 +63,7 @@ class FlowOrchestrator:
         self.db = FactorDB(db_path)
         self.llm = LLMClient(llm_config)
 
-        self.paper_search = PaperSearchAgent(self.llm)
+        self.paper_search = PaperSearchAgent(self.llm, db_path=db_path)
         self.extract = FactorExtractAgent(self.llm)
         self.implement = FactorImplementAgent(
             self.llm, output_dir=os.path.join(output_dir, "factors"))
@@ -199,6 +199,9 @@ class FlowOrchestrator:
                          # 摘要是原源就有，还是跨库回填来的
                          "abstract_backfilled": bool(
                              p.get("abstract_backfilled")),
+                         # 中文社区帖的质量信号（精华/收藏）
+                         "is_best": bool(p.get("is_best")),
+                         "collections": int(p.get("collections") or 0),
                          "zh_summary": (zh[i].get("summary", "") if i < len(zh) else ""),
                          "zh_relevance": (zh[i].get("relevance", "") if i < len(zh) else "")}
                         for i, p in enumerate(papers)]}))

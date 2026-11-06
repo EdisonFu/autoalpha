@@ -53,6 +53,8 @@ Step 2 search     多源召回 + 跨源去重 + 回填摘要 + 滤非研究条�
 | `sources/` | 各检索源适配 + 跨源去重，统一 schema |
 | `sources/fulltext.py` | arXiv 全文抓取 + 方法论章节抽取（可选 pypdf） |
 | `sources/backfill.py` | 跨库补摘要（OpenAlex↔Crossref）+ 滤非研究条目 |
+| `sources/joinquant.py` | 聚宽中文社区：抓列表+正文入 SQLite，本地中文检索 |
+| `sources/zh_terms.py` | 中文领域术语提取（词典匹配，不用分词） |
 | `sources/feeds.py` | RSS 灵感池（独立于主链路） |
 | `metrics.py` | 指标容器，字段名自带口径 |
 | `backtest.py` | 分层组合、净值、换手、扣费 |
@@ -142,7 +144,13 @@ auto research 是 loop：每轮结束由 `research_loop_agent` 读失败原因�
 到 `MAX_ROUNDS` 要明确提示偏差，不能无限循环。
 新一轮的 IS/OOS 切分必须复用（`o._engine` 不重置），否则跨轮不可比。
 
-**12. 失败必须可见。**
+**12. 接新数据源前，先查 robots.txt 与条款，再写代码。**
+雪球技术上已验证可抓（camoufox 过 WAF，8 秒拿到三个接口 JSON），
+但其 robots.txt 明确写着「禁止将内容用于任何 AI 系统，包括 RAG」
+并逐个点名封禁 ClaudeBot/GPTBot —— 那道 WAF 就是这份声明的技术执行。
+能绕过去不等于该绕。顺序反了会白写一整天代码。
+
+**13. 失败必须可见。**
 静默降级是本项目最贵的教训（见 §踩过的坑）。解析失败要留下可读提示，
 不要返回空值。`factor_judge` 解析失败时 **REJECT 而非 APPROVE**——
 审查缺失是扣留因子的理由，不是放行的理由。
@@ -187,6 +195,27 @@ auto research 是 loop：每轮结束由 `research_loop_agent` 读失败原因�
 
 曾因服务端日志里没有某条消息就断定「并发没触发」。
 那是 `FlowEvent`（走 SSE），本来就不落在 stdout。证据来源用错了。
+
+### 截断若按源顺序，后接入的源会被系统性砍掉
+
+`dedupe()` 保留首次出现顺序，即 `build_sources()` 的顺序。
+而打分前 `papers[:60]` 直接按这个顺序切 —— 接入聚宽后实测：
+召回 25 条中文帖，最终展示前 10 篇**一条中文都没有**。
+不是内容不好，是它们排在第 90 位以后，根本没进打分配额。
+
+→ 截断前必须 `_prescore_sort()`（只用非 LLM 信号），让各源按质量
+竞争配额。这条对**以后任何新接入的源**都成立：新源永远排在最后。
+
+### 聚宽接口：referer 与 keyword 的坑
+
+`listV2` 必须带 `x-requested-with: XMLHttpRequest`，且 referer 要是
+`/view/community/list?listType=1`。用 `/community/index` 当 referer
+会返回 `{"code":"20000","msg":"系统异常"}`，**带 cookie 也一样**。
+真实请求头是从 playwright 抓包比对出来的，不是猜的。
+
+另外 `listV2` 的 `keyword`/`title` 参数**被服务端忽略**：
+传「动量」「低波动」「小市值」返回完全相同的列表。所以它只能
+「抓入库 → 本地筛」，不能当实时检索源。东财 `/report/jg` 同样如此。
 
 ### 布局 bug 逃得过逻辑测试
 

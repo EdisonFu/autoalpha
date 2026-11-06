@@ -548,6 +548,19 @@ class FeedReq(BaseModel):
     limit: int = 30
 
 
+@app.post("/api/joinquant/refresh")
+def joinquant_refresh(pages: int = 6):
+    """
+    抓取聚宽社区帖并入库。其列表接口不支持关键词（实测 keyword 被忽略），
+    所以与 RSS 同模式：先抓后筛。检索时若库为空会自动抓一次。
+    """
+    from .sources.joinquant import refresh
+    try:
+        return refresh(get_orch().db.db_path, pages=pages)
+    except Exception as e:
+        raise HTTPException(500, f"抓取失败: {e}")
+
+
 @app.post("/api/feeds/refresh")
 def feeds_refresh():
     """抓取量化博客/机构 RSS 并入库。RSS 不支持按词检索，故先抓后筛。"""

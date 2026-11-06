@@ -43,12 +43,19 @@ _DOC_WEIGHT = {
     "preprint":      0.72,
     "thesis":        0.60,
     "book":          0.50,   # 正常会被 drop_non_research 滤掉，留作兜底
+    "cn_post":       0.86,   # 中文量化社区帖：贴近 A股实盘，常附可运行代码
 }
 # 时间项半衰期：3 年前的论文时间得分 0.5，而非线性归一化的近 0
 _RECENCY_HALFLIFE_DAYS = 365 * 3
 # 综述/教程类标题。这类文献讲「这个领域有什么」，不讲「怎么算」，
 # 对复现因子没有直接价值。实测被顶到第一的 Origin and Evolution of
 # Momentum: A Literature Review 就是典型 —— 提取出的 4 个因子全部未过门控。
+# 正文里的代码痕迹。聚宽帖常直接给策略代码，这类内容比只讲概念的
+# 论文更容易落地成因子。
+_HAS_CODE = re.compile(
+    r"def |import pandas|import numpy|initialize\(|handle_data\(|"
+    r"```|get_fundamentals|order_target|run_daily", re.I)
+
 _REVIEW_TITLE = re.compile(
     r"literature review|a survey|survey of|review of|a review|"
     r"systematic review|tutorial|a primer|introduction to|"
@@ -146,9 +153,10 @@ class PaperSearchAgent:
     CATEGORIES = ["q-fin.PM", "q-fin.TR", "q-fin.ST", "q-fin.MF"]
 
     def __init__(self, llm: LLMClient, local_library_dir: str = None,
-                 enabled_sources=None):
+                 enabled_sources=None, db_path: str = "autoalpha.db"):
         self.llm = llm
         self.local_library_dir = local_library_dir
+        self.db_path = db_path
         self.enabled_sources = enabled_sources      # None = 全部默认源
         self.intent = None                          # Step 1 的产物，由编排器注入
         self._kw_cache:      Dict[str, dict]       = {}   # idea → {title_terms}
@@ -196,7 +204,7 @@ class PaperSearchAgent:
         intent = self.intent or self._recognize(idea)
 
         papers: List[Dict] = []
-        for src in build_sources(self.enabled_sources):
+        for src in build_sources(self.enabled_sources, self.db_path):
             got = src._safe_search(intent, _PER_SOURCE)
             if got:
                 print(f"[PaperSearch] {src.name}: {len(got)} 条")
@@ -219,15 +227,48 @@ class PaperSearchAgent:
         # LLM 语义打分（传入标题+摘要段落）
         # 只对 relevance 靠前的 _SCORE_LIMIT 篇打分，其余直接丢弃 —— 见该常量注释
         if len(papers) > _SCORE_LIMIT:
+            # 截断前必须预排序。原来直接 papers[:60]，而 dedupe 保留的是
+            # 【源顺序】（arxiv → openalex → crossref → joinquant），
+            # 于是后加入的源被系统性砍掉：实测聚宽召回 25 条，
+            # 最终展示前 10 篇里一条中文都没有。
+            # 预排序只用非 LLM 信号（可复现性 / 文献类型 / 引用量），
+            # 让各源按质量竞争配额，而不是按接入先后。
+            papers = self._prescore_sort(papers)
+            dropped = len(papers) - _SCORE_LIMIT
             print(f"[PaperSearch] 打分前截断: {len(papers)} → {_SCORE_LIMIT} 篇"
                   f"（省约 {(1 - _SCORE_LIMIT / len(papers)):.0%} 打分 token）")
             papers = papers[:_SCORE_LIMIT]
+            kept_cn = sum(1 for p in papers if p.get("doc_type") == "cn_post")
+            print(f"[PaperSearch] 截断后中文社区帖 {kept_cn} 篇"
+                  f"（淘汰 {dropped} 篇低预排分条目）")
         papers, scores = self._llm_score(idea, papers)
         print(f"[PaperSearch] 语义过滤后剩 {len(papers)} 篇，按日期+相关性综合排序")
 
         # 综合排序：0.6 × 相关性得分（归一化）+ 0.4 × 时间新鲜度（归一化）
         papers = self._combined_sort(papers, scores)
         return papers
+
+    @staticmethod
+    def _prescore_sort(papers: List[Dict]) -> List[Dict]:
+        """
+        打分前的预排序，决定谁能进入 LLM 打分配额。
+
+        只用不需要 LLM 的信号：可复现性、文献类型、引用/收藏量。
+        与 _combined_sort 的区别是这里没有语义相关性 —— 那正是要打分
+        才知道的，所以这一阶段只保证「有资格被打分的不是按源顺序决定的」。
+        """
+        import math
+
+        def key(p):
+            rp = PaperSearchAgent._reproducibility(p)
+            dw = _DOC_WEIGHT.get(p.get("doc_type") or "paper", 1.0)
+            cites = int(p.get("citations") or 0)
+            # 社区帖没有被引数，用收藏数充当同类信号（同为同行认可）
+            cites += int(p.get("collections") or 0)
+            cw = min(1.0, math.log1p(max(0, cites)) / math.log1p(200))
+            return 0.55 * rp + 0.25 * dw + 0.20 * cw
+
+        return sorted(papers, key=key, reverse=True)
 
     @staticmethod
     def _reproducibility(p: Dict) -> float:
@@ -252,6 +293,18 @@ class PaperSearchAgent:
         score = 0.0
         if is_arxiv(p.get("pdf_url", "")):
             score += 0.5
+
+        # 中文社区帖（聚宽）常附完整可运行的策略代码，可复现性不低于论文。
+        # 若只按「是否 arXiv」评分，这些最贴近 A股实盘的资料会被系统性压低。
+        if p.get("doc_type") == "cn_post":
+            body = p.get("abstract") or ""
+            score += 0.35
+            # 优先用抓取时在完整正文上测出的标志；老数据没有该字段时
+            # 退回在摘要上匹配（会低估，但好过没有）
+            if p.get("has_code") or _HAS_CODE.search(body):
+                score += 0.25
+            if p.get("is_best"):
+                score += 0.10
 
         title = (p.get("title") or "").lower()
         if _REVIEW_TITLE.search(title):
