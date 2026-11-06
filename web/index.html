@@ -136,6 +136,32 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   border:1px solid var(--line);color:var(--fg2);font-family:var(--mono)}
 .badge2.src{color:var(--acc2);border-color:rgba(124,92,255,.35)}
 .badge2.bf{color:#8fa8c8;border-color:rgba(143,168,200,.3);border-style:dashed}
+/* 换检索式重查：与「加载下一批」区分开，后者只是翻页，这个才是换方向 */
+.research{margin-top:12px;padding:12px 14px;border:1px solid var(--line);
+  border-radius:10px;background:rgba(79,140,255,.05)}
+.research .rNote{font-size:12px;color:var(--fg2);line-height:1.7;margin-bottom:10px}
+.research .rNote b{color:var(--fg);font-weight:600}
+.research .rRow{display:flex;gap:8px}
+.research .rRow input{flex:1;min-width:0;padding:9px 12px;border-radius:8px;
+  border:1px solid var(--line);background:var(--bg2);color:var(--fg);font-size:13px}
+.research .rRow input:focus{outline:none;border-color:var(--acc)}
+.research .rRow button{padding:9px 18px;white-space:nowrap}
+.research .rHint{font-size:11.5px;color:var(--fg2);margin-top:8px;line-height:1.7}
+.research .rHint code{color:var(--acc);font-size:11px}
+/* 研究循环：轮次记账与规避清单 */
+.rounds{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.rounds h4{font-size:12.5px;color:var(--fg2);font-weight:600;margin-bottom:8px}
+.rounds table{width:100%;border-collapse:collapse;font-size:12px}
+.rounds th{text-align:left;color:var(--fg2);font-weight:500;padding:5px 8px;
+  border-bottom:1px solid var(--line)}
+.rounds td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.04);
+  color:var(--fg)}
+.rounds td.q{color:var(--fg2);font-size:11.5px;max-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.rounds .rWarn{margin-top:10px;font-size:11.5px;color:#e8b563;line-height:1.7}
+.avoid{margin-top:10px;font-size:12px;color:var(--fg2)}
+.avoid b{color:var(--fg);font-weight:600;display:block;margin-bottom:5px}
+.avoid ul{margin:0;padding-left:18px;line-height:1.8}
 .badge2.dt-report{color:var(--warn);border-color:rgba(245,158,11,.4)}
 .badge2.dt-working_paper{color:var(--ok);border-color:rgba(34,197,94,.35)}
 .badge2.dt-paper{color:var(--acc);border-color:rgba(79,140,255,.35)}
@@ -416,7 +442,7 @@ let paperMore=false, paperPage=1, paperTotal=0, INTENT=null;
 const PANEL_STEP = {            // 面板 → 所属步骤
   pIntent:'intent', pPapers:'search', pData:'data',
   // pErr 不列入：错误提示不该被单屏逻辑隐藏
-  pSpecs:'extract', pEval:'evaluate', pExt:'extend',
+  pSpecs:'extract', pEval:'evaluate', pExt:'extend', pNext:'done',
 };
 let OPEN_STEP = null;           // 当前展开的步骤（null = 跟随最新）
 
@@ -642,6 +668,8 @@ function handle(ev){
     if(payload.next==='search')showIntent(true);
     if(payload.next==='select')showPapers();
     if(payload.next==='run')showSpecs();
+    if(payload.next==='next_round')showProposal(payload);
+    if(payload.next==='done'&&payload.rounds)showRounds(payload);
   }
   else if(kind==='data'){
     if(payload.intent){INTENT=payload.intent; showIntent();}
@@ -666,6 +694,7 @@ function handle(ev){
       log('  延伸变体：'+payload.specs.map(s=>s.factor_name).join('、'));
       showExtVariants(payload.specs);
     }
+    if(payload.proposal)PROPOSAL=payload.proposal;
     if(payload.n_symbols!==undefined)showData(payload);
     if(payload.evaluation){evals.push(payload.evaluation);showEvals()}
   }
@@ -788,10 +817,45 @@ function showPapers(){
     <div class="actions">
       <button data-act="select" onclick="submitSel()">从选中资料提取因子假设</button>
       ${paperMore?`<button data-act="more" class="ghost" onclick="morePapers()">加载下一批</button>`:''}
+      <button class="ghost" onclick="toggleResearch()">资料不对？换检索式重查</button>
       <button data-act="select" class="ghost" onclick="selP.clear();submitSel()">跳过，用原始想法</button>
+    </div>
+    <div id="researchBox" class="research hidden">
+      <div class="rNote">「加载下一批」取的是同一次检索里排名更靠后的，<b>不会更相关</b>。
+        资料不对就该换检索式。改完会清空当前列表重新召回、补摘要、重新打分。</div>
+      <div class="rRow">
+        <input id="reQuery" type="text" placeholder="英文检索式，如 cross-sectional momentum ETF">
+        <button onclick="doResearch()">重新检索</button>
+      </div>
+      <div class="rHint">提示：检索式越规范召回越多（实测同一意图不同表述差 800 倍）。
+        带上市场词，如 <code>Chinese A-share ETF momentum</code>。</div>
     </div>`);
   drawPapers();
 }
+function toggleResearch(){
+  const b=$('researchBox');
+  if(!b)return;
+  b.classList.toggle('hidden');
+  if(!b.classList.contains('hidden')){
+    const q=$('reQuery');
+    // 预填当前意图的检索式，用户在其基础上改，不用从头写
+    if(q&&!q.value)q.value=(INTENT&&INTENT.canonical_en)||'';
+    q&&q.focus();
+  }
+}
+
+async function doResearch(){
+  const q=($('reQuery')?.value||'').trim();
+  if(!q){log('检索式不能为空','err');return}
+  // 本地列表与选中态都要清：sess.papers 在 page=1 时整体替换，
+  // 前端若还留着旧 idx，会把新列表里无关的论文当成已选。
+  papers=[];selP.clear();paperPage=1;paperMore=false;
+  INTENT={...(INTENT||{}),canonical_en:q};
+  log('换检索式重查：'+q);
+  await fetch('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({session_id:SID,intent:{canonical_en:q}})});
+}
+
 function drawPapers(){
   $('pList').innerHTML=papers.map(p=>`
     <div class="item ${selP.has(p.idx)?'sel':''}" onclick="togP(${p.idx})">
@@ -887,6 +951,50 @@ function backToPapers(){
 }
 
 let selE=new Set();        // 选中要做延伸的因子
+
+let PROPOSAL=null;
+
+function showRounds(pl){
+  // 轮次记账必须可见：跑了 N 轮、试了 M 个因子后，通过率的选择性偏差
+  // 会累积，用户需要知道自己看到的是第几次搜索的结果。
+  const rs=pl.rounds||[];
+  if(!rs.length)return;
+  const rows=rs.map(r=>`<tr><td>${r.round}</td>
+    <td class="q">${esc(r.query||'')}</td>
+    <td>${r.n_evals}</td><td>${r.n_pass}</td></tr>`).join('');
+  return `<div class="rounds"><h4>研究轮次</h4>
+    <table><thead><tr><th>轮</th><th>检索式</th><th>试验</th><th>通过</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <div class="rWarn">累计试验 ${pl.n_factor_trials||0} 个因子。
+      每多跑一轮就是在同一批数据上多搜一次，选择性偏差随之累积 ——
+      通过率变高不代表因子更可信。</div></div>`;
+}
+
+function showProposal(pl){
+  const p=pl.proposal||PROPOSAL;
+  if(!p)return;
+  const avoid=(p.avoid||[]).map(a=>`<li>${esc(a)}</li>`).join('');
+  panel('pNext',`<h3>反思与下一轮 <span class="badge">第 ${pl.round_no||1}/${pl.max_rounds||4} 轮</span></h3>
+    <div class="zh"><b>本轮结论</b>${esc(p.learned||'')}</div>
+    <div class="zh rel"><b>下一轮方向</b>${esc(p.next_direction_zh||'')}</div>
+    <div class="me" style="margin-top:6px">检索式：<code>${esc(p.canonical_en||'')}</code></div>
+    ${p.rationale?`<div class="note" style="margin-top:8px">${esc(p.rationale)}</div>`:''}
+    ${avoid?`<div class="avoid"><b>本轮规避</b><ul>${avoid}</ul></div>`:''}
+    ${showRounds(pl)||''}
+    <div class="actions">
+      <button onclick="doNextRound()">按此方向开始下一轮</button>
+      <button class="ghost" onclick="openStep('evaluate')">只看本轮结果</button>
+    </div>`);
+  openStep('done');
+}
+
+async function doNextRound(){
+  log('开始下一轮研究…');
+  PROPOSAL=null;
+  papers=[];selP.clear();specs=[];selS.clear();evals=[];
+  await fetch('/api/next_round',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({session_id:SID})});
+}
 
 function showExtend(){
   const pass=evals.filter(e=>e.status==='PASS');
@@ -1222,6 +1330,23 @@ async function playExtendDemo(){
   handle({kind:'stage_end',stage:'extend',message:'延伸探索完成',payload:{}});
   log(`延伸探索：${np}/${results.length} 个变体通过。`
       +`注意其中有变体反而不如基础因子——延伸不保证改进。`,'ok');
+
+  // 反思与下一轮：auto research 的主循环，演示必须覆盖，
+  // 否则用户会以为项目就是「跑一轮 → 结束」。
+  if(d.proposal){
+    await step(700);
+    handle({kind:'data',stage:'done',message:d.proposal.next_direction_zh,
+            payload:{proposal:d.proposal,round:1,rounds:d.rounds||[],
+                     n_factor_trials:d.n_factor_trials||0}});
+    await step(400);
+    handle({kind:'await_input',stage:'done',
+            message:'是否按此方向开始下一轮研究',
+            payload:{next:'next_round',proposal:d.proposal,
+                     can_extend:np>0,round_no:1,max_rounds:4,
+                     rounds:d.rounds||[],n_factor_trials:d.n_factor_trials||0}});
+    log('反思完成：下一轮方向已给出。真实运行中可一键进入第二轮，'
+        +'系统会带着本轮失败原因重新检索。','ok');
+  }
 }
 
 async function refreshFeeds(){

@@ -406,3 +406,70 @@ def test_backfilled_abstract_is_labelled(page):
     assert len(items) == 2, f"应渲染两条，实际 {len(items)}"
     assert "摘要回填" not in items[0], "原源自带摘要的不该被标成回填"
     assert "摘要回填" in items[1], "回填来的必须标出"
+
+
+# ── 研究循环的可见性 ────────────────────────────────────────────────────────
+
+def test_proposal_panel_shows_next_direction_and_accounting(page):
+    """
+    auto research 的主循环必须对用户可见：下一轮查什么、为什么这么查、
+    以及已经跑了几次试验。少了记账，用户会把第 4 轮的通过率当成第 1 轮的。
+    """
+    page.evaluate("""() => {
+        handle({kind:'await_input',stage:'done',message:'是否开始下一轮',
+          payload:{next:'next_round',round_no:2,max_rounds:4,
+            proposal:{learned:'动量失效且换手超标',
+                      next_direction_zh:'低波动手量',
+                      canonical_en:'low volatility momentum',
+                      rationale:'需换经济机制',
+                      avoid:["避免宏观数据","避免超短周期"]},
+            rounds:[{round:1,query:'q1',n_evals:4,n_pass:1},
+                    {round:2,query:'q2',n_evals:3,n_pass:0}],
+            n_factor_trials:7}});
+    }""")
+    page.wait_for_timeout(400)
+
+    el = page.query_selector("#pNext")
+    assert el, "反思面板应出现"
+    html = el.inner_html()
+    for text in ["本轮结论", "下一轮方向", "low volatility momentum",
+                 "研究轮次", "累计试验", "选择性偏差"]:
+        assert text in html, f"反思面板缺少 {text}"
+    assert "避免宏观数据" in html, "规避清单是下一轮不重复犯错的关键"
+    rows = page.eval_on_selector_all("#pNext .rounds tbody tr", "es=>es.length")
+    assert rows == 2, f"两轮记账都该列出，实际 {rows}"
+    assert "2/4" in html or "第 2" in html, "当前轮次要可见"
+
+
+def test_proposal_renders_without_optional_fields(page):
+    """反思结果字段缺失时不能崩 —— LLM 输出不保证完整。"""
+    page.evaluate("""() => {
+        handle({kind:'await_input',stage:'done',message:'',
+          payload:{next:'next_round',proposal:{canonical_en:'only query'},
+                   rounds:[],n_factor_trials:0}});
+    }""")
+    page.wait_for_timeout(400)
+    assert page.query_selector("#pNext"), "字段不全也要能渲染"
+    assert not page._errors, f"控制台报错: {page._errors[:3]}"
+
+
+def test_research_box_toggles_and_prefills_query(page):
+    """「换检索式重查」是资料不对时的出口，且要预填当前检索式便于修改。"""
+    page.evaluate("""() => {
+        INTENT={canonical_en:'cross-sectional momentum ETF'};
+        handle({kind:'data',stage:'search',message:'',payload:{page:1,total:1,
+          has_more:false,papers:[{idx:0,title:'P1',abstract:'a'}]}});
+        handle({kind:'await_input',stage:'select',message:'',payload:{next:'select'}});
+    }""")
+    page.wait_for_timeout(300)
+    assert page.evaluate(
+        "document.querySelector('#researchBox').classList.contains('hidden')"), \
+        "默认应收起"
+    page.evaluate("toggleResearch()")
+    page.wait_for_timeout(200)
+    assert not page.evaluate(
+        "document.querySelector('#researchBox').classList.contains('hidden')"), \
+        "点击后应展开"
+    assert page.input_value("#reQuery") == "cross-sectional momentum ETF", \
+        "应预填当前检索式"
+    assert not page._errors

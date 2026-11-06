@@ -236,9 +236,9 @@ def run(req: RunReq):
 
     def _gen():
         yield from orch.run_factors(sess, req.spec_indices)
-        yield FlowEvent(EventKind.STAGE_END, Stage.DONE, "本轮完成",
-                        {"can_extend": any(e.status == "PASS"
-                                           for e in sess.evaluations)})
+        # 评估完直接进入反思：auto research 是 loop，不是跑完就结束。
+        # reflect_round 会记账并给出下一轮方向（含 can_extend）。
+        yield from orch.reflect_round(sess)
 
     if not _spawn(req.session_id, _gen):
         raise HTTPException(409, "上一阶段尚未结束，请稍候")
@@ -260,6 +260,22 @@ def extend(req: RunReq):
     if not _spawn(req.session_id, _gen):
         raise HTTPException(409, "上一阶段尚未结束，请稍候")
     return {"ok": True}
+
+
+@app.post("/api/next_round")
+def next_round(req: RunReq):
+    """按反思给出的方向开始下一轮研究。保留轮次记账，重置其余状态。"""
+    sess = _sessions.get(req.session_id)
+    if not sess:
+        raise HTTPException(404, "session not found")
+    orch = get_orch()
+
+    def _gen():
+        yield from orch.start_next_round(sess)
+
+    if not _spawn(req.session_id, _gen):
+        raise HTTPException(409, "上一阶段尚未结束，请稍候")
+    return {"ok": True, "round": sess.round_no}
 
 
 @app.get("/api/events/{session_id}")
@@ -300,6 +316,11 @@ def session_state(session_id: str):
         "stage": sess.stage.value, "error": sess.error,
         "n_papers": len(sess.papers), "n_specs": len(sess.specs),
         "evaluations": [evaluation_to_dict(e) for e in sess.evaluations],
+        # 轮次记账：让调用方能判断「这些通过率是第几次搜索的产物」
+        "round_no": sess.round_no,
+        "rounds": sess.rounds,
+        "n_factor_trials": sess.n_factor_trials,
+        "next_proposal": sess.next_proposal,
         "usage": get_orch().llm.meter.summary(),
     }
 
@@ -559,11 +580,14 @@ def demo_payload():
     """
     from .demo import (DEMO_INTENT, DEMO_PAPERS, DEMO_SPECS, DEMO_DATA,
                        DEMO_EVALS, DEMO_USAGE, DEMO_BANNER,
-                       DEMO_EXTENSIONS, DEMO_EXT_EVALS)
+                       DEMO_EXTENSIONS, DEMO_EXT_EVALS,
+                       DEMO_PROPOSAL, DEMO_ROUNDS)
     return {"banner": DEMO_BANNER, "intent": DEMO_INTENT,
             "papers": DEMO_PAPERS, "specs": DEMO_SPECS, "data": DEMO_DATA,
             "evals": DEMO_EVALS, "usage": DEMO_USAGE,
-            "extensions": DEMO_EXTENSIONS, "ext_evals": DEMO_EXT_EVALS}
+            "extensions": DEMO_EXTENSIONS, "ext_evals": DEMO_EXT_EVALS,
+            "proposal": DEMO_PROPOSAL, "rounds": DEMO_ROUNDS,
+            "n_factor_trials": 6}
 
 
 @app.get("/api/health")

@@ -31,11 +31,12 @@ export LLM_API_KEY=...        LLM_MODEL=<model-id>
 
 ```
 Step 1 intent     意图识别：用户表述 → 规范学术检索式
-Step 2 search     多源召回 arXiv + OpenAlex + Crossref，跨源去重
+Step 2 search     多源召回 + 跨源去重 + 回填摘要 + 滤非研究条目
        data       数据准备：选源取数、按资产类别筛池、建 IS/OOS 切分
-       extract    提取因子假设（注入可用数据约束）
-       implement  LLM 生成代码 → 沙箱执行（3 路并发）
+       extract    提取因子假设（arXiv 读全文，其余读摘要并标注）
+       implement  LLM 按骨架生成代码 → 沙箱执行（3 路并发）
        evaluate   IS/OOS 双层门控（串行）
+       reflect    反思本轮 → 产出下一轮方向 → 回到 Step 1（loop）
 ```
 
 分步模式每阶段暂停等确认；`mode=auto` 一路跑完。
@@ -117,7 +118,27 @@ t 日收盘定的权重吃 t+1 日收益。`backtest.compute_nav` 的契约。
 最慢要 1147s。原因是这些 URL 几乎全是 doi.org，卡在连不通与登录墙上，
 指纹伪装对这两种失败都无效。引入爬虫框架前先确认卡点是不是反爬。
 
-**10. 失败必须可见。**
+**10. 代码生成要给可运行骨架，不能只给签名。**
+实测一次真实运行：prompt 只描述了 `data: dict[股票代码, DataFrame]`，
+LLM 却写成按字段名取 `data["close"]` → KeyError。它被归成 DATA，
+拿到 dropna()/min_periods 的提示，而 repair prompt 又要求「最小修改」，
+于是三次重试全在原地打转。
+→ `_CODEGEN_SYSTEM` 现在给出**经真实数据验证过**的完整骨架
+（数据访问 + 截面 rank + stack + main 块），LLM 只填核心逻辑。
+结构性误解单列为 `STRUCTURE`，明确允许重写数据访问层；
+`base_parts` 附真实数据形状（具体 key、shape、列名），不让 LLM 靠猜。
+改骨架后必须跑 `test_implement_structure.py` —— 里面有条测试直接
+把 prompt 里的骨架抽出来在真实数据上执行，模板错了会当场炸。
+
+**11. 研究循环必须记账。**
+auto research 是 loop：每轮结束由 `research_loop_agent` 读失败原因，
+产出下一轮检索式，回到 Step 1。但每多跑一轮就是在同一批数据上多搜一次，
+选择性偏差累积 —— 4 轮 40 个因子选出 3 个，和首轮选出 3 个含义完全不同。
+`sess.rounds` / `n_factor_trials` 必须跨轮保留，反思失败也要记账；
+到 `MAX_ROUNDS` 要明确提示偏差，不能无限循环。
+新一轮的 IS/OOS 切分必须复用（`o._engine` 不重置），否则跨轮不可比。
+
+**12. 失败必须可见。**
 静默降级是本项目最贵的教训（见 §踩过的坑）。解析失败要留下可读提示，
 不要返回空值。`factor_judge` 解析失败时 **REJECT 而非 APPROVE**——
 审查缺失是扣留因子的理由，不是放行的理由。

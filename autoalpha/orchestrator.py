@@ -32,6 +32,7 @@ from .agents.factor_implement_agent import FactorImplementAgent, classify_error
 from .agents.factor_extension_agent import FactorExtensionAgent
 from .agents.translate_agent import TranslateAgent
 from .agents.intent_agent import IntentAgent
+from .agents.research_loop_agent import ResearchLoopAgent
 
 DEFAULT_KLINES = "/Users/fuzhendong/GolandProjects/quant/factor-signal/data/klines"
 MAX_IMPLEMENT_RETRIES = 2
@@ -69,6 +70,7 @@ class FlowOrchestrator:
         self.extension = FactorExtensionAgent(self.llm)
         self.translate = TranslateAgent(self.llm)
         self.intent_agent = IntentAgent(self.llm)
+        self.research_loop = ResearchLoopAgent(self.llm)
 
         self.universe_preset = universe_preset
         self.max_workers = max(1, int(max_workers))
@@ -560,6 +562,139 @@ class FlowOrchestrator:
                                 "extension_type": s.extension_type}
                                for s in exts[:MAX_EXTENSIONS]]}))
         yield sess.record(FlowEvent(EventKind.STAGE_END, Stage.EXTEND, "延伸完成"))
+
+    # ── 阶段 7：反思 → 下一轮（auto research 的 loop）─────────────────────
+
+    MAX_ROUNDS = 4
+
+    def reflect_round(self, sess: FlowSession) -> Iterator[FlowEvent]:
+        """
+        本轮结束，把结论变成下一轮该查什么。
+
+        记账在反思之前做：无论反思成功与否，这一轮的试验次数都要留下，
+        否则选择性偏差会静默累积。
+        """
+        n_pass = sum(1 for e in sess.evaluations if e.status == "PASS")
+        n_tried = len(sess.evaluations)
+        sess.n_factor_trials += n_tried
+        sess.rounds.append({
+            "round": sess.round_no,
+            "query": getattr(sess.intent, "canonical_en", ""),
+            "n_specs": len(sess.specs),
+            "n_evals": n_tried,
+            "n_pass": n_pass,
+            "failures": [
+                {"factor": e.factor_name, "status": e.status,
+                 "reason": (e.fail_reason or "")[:200]}
+                for e in sess.evaluations if e.status != "PASS"],
+        })
+
+        yield sess.record(FlowEvent(
+            EventKind.LOG, Stage.DONE,
+            f"第 {sess.round_no} 轮结束：{n_tried} 个因子，{n_pass} 通过；"
+            f"累计试验 {sess.n_factor_trials} 个"))
+
+        if sess.round_no >= self.MAX_ROUNDS:
+            yield sess.record(FlowEvent(
+                EventKind.LOG, Stage.DONE,
+                f"已达轮次上限 {self.MAX_ROUNDS}。注意：{sess.n_factor_trials} 次"
+                f"试验里挑出的因子存在选择性偏差，门控通过率不代表泛化能力。"))
+            yield FlowEvent(EventKind.AWAIT_INPUT, Stage.DONE,
+                            "研究结束", {"next": "done", "can_extend": False,
+                                        "rounds": sess.rounds,
+                                        "n_factor_trials": sess.n_factor_trials})
+            return
+
+        yield sess.record(FlowEvent(EventKind.STAGE_START, Stage.DONE,
+                                    "反思本轮，规划下一轮研究方向"))
+        nxt = self.research_loop.reflect(sess.intent, sess.evaluations,
+                                        sess.round_no, self.MAX_ROUNDS)
+        if not nxt:
+            # 失败必须可见：静默退化成「再跑一遍」会让用户以为系统在工作
+            err = self.research_loop.last_error or "反思失败"
+            yield sess.record(FlowEvent(EventKind.LOG, Stage.DONE,
+                                        f"无法规划下一轮：{err}"))
+            yield FlowEvent(EventKind.AWAIT_INPUT, Stage.DONE,
+                            f"反思失败：{err}", {"next": "done",
+                                              "can_extend": False,
+                                              "rounds": sess.rounds})
+            return
+
+        sess.next_proposal = nxt
+        yield sess.record(FlowEvent(
+            EventKind.DATA, Stage.DONE, nxt.get("next_direction_zh", ""),
+            {"proposal": nxt, "round": sess.round_no,
+             "rounds": sess.rounds, "n_factor_trials": sess.n_factor_trials}))
+        yield FlowEvent(EventKind.AWAIT_INPUT, Stage.DONE,
+                        "是否按此方向开始下一轮研究",
+                        {"next": "next_round", "proposal": nxt,
+                         "can_extend": n_pass > 0,
+                         "round_no": sess.round_no,
+                         "max_rounds": self.MAX_ROUNDS,
+                         "rounds": sess.rounds,
+                         "n_factor_trials": sess.n_factor_trials})
+
+    def start_next_round(self, sess: FlowSession,
+                         proposal: Dict = None) -> Iterator[FlowEvent]:
+        """
+        带着上轮结论进入下一轮。保留记账，重置其余状态。
+
+        复用已加载的数据与 IS/OOS 切分 —— 切分不能变，否则跨轮结果不可比。
+        """
+        nxt = proposal or getattr(sess, "next_proposal", None)
+        if not nxt:
+            yield sess.record(FlowEvent(EventKind.LOG, Stage.DONE,
+                                        "没有下一轮方向，结束"))
+            return
+
+        sess.round_no += 1
+        sess.papers = []
+        sess.selected_papers = []
+        sess.specs = []
+        sess.evaluations = []
+        sess.paper_page = 1
+        sess.paper_total = 0
+        # 检索缓存按 query 失效，新一轮必须真正重新召回
+        self.paper_search._results_cache.clear()
+
+        avoid = nxt.get("avoid") or []
+        direction = nxt.get("next_direction_zh") or nxt.get("canonical_en", "")
+        yield sess.record(FlowEvent(
+            EventKind.STAGE_START, Stage.INTENT,
+            f"第 {sess.round_no} 轮：{direction}"))
+        if avoid:
+            yield sess.record(FlowEvent(
+                EventKind.LOG, Stage.INTENT,
+                "本轮规避：" + "；".join(avoid[:4])))
+
+        # 意图直接由反思结果构造，不再让 intent agent 重新理解一遍 ——
+        # 它已经知道上一轮为什么失败，重新识别会丢掉这些约束。
+        from dataclasses import replace
+        base = sess.intent
+        new_intent = replace(
+            base,
+            canonical_en=nxt["canonical_en"],
+            aliases=[a for a in (base.aliases or [])
+                     if a.lower() != nxt["canonical_en"].lower()][:3],
+            restated_zh=direction,
+            raw_input=direction,
+        ) if base is not None else None
+
+        if new_intent is None:
+            yield from self.recognize_intent(sess, direction)
+        else:
+            sess.intent = new_intent
+            self.paper_search.intent = new_intent
+            yield sess.record(FlowEvent(
+                EventKind.DATA, Stage.INTENT, direction,
+                {"intent": new_intent.__dict__}))
+            yield sess.record(FlowEvent(EventKind.STAGE_END, Stage.INTENT,
+                                        "意图已根据上轮结论更新"))
+
+        yield from self.search_papers(sess, sess.idea)
+        yield FlowEvent(EventKind.AWAIT_INPUT, Stage.SELECT,
+                        f"第 {sess.round_no} 轮：请选择参考资料",
+                        {"next": "select", "round": sess.round_no})
 
     # ── 全自动串联 ─────────────────────────────────────────────────────────
 

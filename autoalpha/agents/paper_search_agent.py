@@ -28,9 +28,10 @@ _FILTER_BATCH = 20
 _SCORE_LIMIT = 60
 
 # 排序权重。相关性始终是主导项（实测 0.4 的时间权重会压倒它，见 _combined_sort）。
-_REL_W     = 0.60    # LLM 语义相关性
-_RECENCY_W = 0.12    # 时效（半衰期衰减）
-_DOCTYPE_W = 0.18    # 文献类型
+_REL_W     = 0.45    # LLM 语义相关性
+_REPRO_W   = 0.20    # 可复现性：能不能从这篇文献里读出可计算的因子
+_RECENCY_W = 0.10    # 时效（半衰期衰减）
+_DOCTYPE_W = 0.15    # 文献类型
 _CITE_W    = 0.10    # 引用量（log 压缩）
 
 # 文献类型权重。研报与 SSRN 工作论文给到接近期刊的权重：对「这个策略
@@ -45,6 +46,15 @@ _DOC_WEIGHT = {
 }
 # 时间项半衰期：3 年前的论文时间得分 0.5，而非线性归一化的近 0
 _RECENCY_HALFLIFE_DAYS = 365 * 3
+# 综述/教程类标题。这类文献讲「这个领域有什么」，不讲「怎么算」，
+# 对复现因子没有直接价值。实测被顶到第一的 Origin and Evolution of
+# Momentum: A Literature Review 就是典型 —— 提取出的 4 个因子全部未过门控。
+_REVIEW_TITLE = re.compile(
+    r"literature review|a survey|survey of|review of|a review|"
+    r"systematic review|tutorial|a primer|introduction to|"
+    r"state of the art|bibliometric|meta-analysis|"
+    r"综述|研究进展|文献回顾", re.I)
+
 # 语义得分低于此值直接淘汰。原 5 太松，放进了大量边缘论文
 _MIN_RELEVANCE = 7
 
@@ -220,6 +230,39 @@ class PaperSearchAgent:
         return papers
 
     @staticmethod
+    def _reproducibility(p: Dict) -> float:
+        """
+        这篇文献能不能支撑「复现一个因子」，0~1。
+
+        为什么需要这个维度：本项目的目标是复现因子，不是了解领域。
+        一次真实运行里，相关性排序把 *Origin and Evolution of Momentum:
+        A Literature Review* 顶到第一，系统拿它提取出 4 个因子、
+        全部未通过门控 —— 综述根本不含回看窗口、分位切法这些细节，
+        提取出的参数只能由模型自己编。
+
+        三个信号，按可靠性排序：
+          1. 是否 arXiv。实测只有 arXiv 能拿到全文（其余源正文在登录墙后，
+             Unpaywall 给的 PDF 链接 6/6 是绕回 doi.org 的假地址）。
+             全文命中 4-6 项复现细节，摘要只有 0-1 项。
+          2. 标题是否综述/教程。这类文献结构上就不含可复现方法。
+          3. 摘要里已经出现多少复现细节（分位数、回看窗口、调仓、样本期）。
+        """
+        from ..sources.fulltext import is_arxiv, detail_hits
+
+        score = 0.0
+        if is_arxiv(p.get("pdf_url", "")):
+            score += 0.5
+
+        title = (p.get("title") or "").lower()
+        if _REVIEW_TITLE.search(title):
+            score -= 0.6
+
+        n = len(detail_hits(p.get("abstract") or ""))
+        score += min(n, 4) * 0.125
+
+        return max(0.0, min(1.0, score))
+
+    @staticmethod
     def _combined_sort(papers: List[Dict], scores: List[int]) -> List[Dict]:
         """
         综合排序：combined = (1 - _RECENCY_W) × rel_norm + _RECENCY_W × recency
@@ -267,11 +310,14 @@ class PaperSearchAgent:
             cites = max(0, int(p.get("citations") or 0))
             cw = min(1.0, math.log1p(cites) / math.log1p(200))
 
-            combined = (_REL_W * rel_norm + _RECENCY_W * recency
+            rp = PaperSearchAgent._reproducibility(p)
+            combined = (_REL_W * rel_norm + _REPRO_W * rp
+                        + _RECENCY_W * recency
                         + _DOCTYPE_W * dw + _CITE_W * cw)
             p = dict(p)
             p["_relevance_score"] = s
             p["_recency"] = round(recency, 4)
+            p["_reproducibility"] = round(rp, 4)
             p["_combined_score"] = round(combined, 4)
             ranked.append(p)
 

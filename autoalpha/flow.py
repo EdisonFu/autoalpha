@@ -90,6 +90,18 @@ class FlowSession:
     evaluations: List[Any] = field(default_factory=list)
     events: List[FlowEvent] = field(default_factory=list)
     error: str = ""
+    # ── 研究循环记账 ────────────────────────────────────────────────────
+    # auto research 是 loop 不是直线：每轮结束把结论喂回意图识别，
+    # 带着「上轮学到什么」重新检索。但每多跑一轮，就是在同一批数据上
+    # 多做一次搜索，选择性偏差随之累积（77 次试验选 13 个的教训）。
+    # 所以轮次必须记账，并在报告里如实呈现，否则门控数字会越来越好看
+    # 而越来越不可信。
+    round_no: int = 1
+    rounds: List[Dict] = field(default_factory=list)
+    # 累计尝试过的因子数（跨轮累加，含延伸变体），用于 deflated Sharpe
+    n_factor_trials: int = 0
+    # 反思产出的下一轮方向，等用户确认后由 start_next_round 消费
+    next_proposal: Optional[Dict] = None
     # 用户决策通过这个 future 回传（Web 端用）
     _pending: Optional[asyncio.Future] = None
 

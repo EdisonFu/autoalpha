@@ -203,6 +203,19 @@ def main():
         shots.append("00-overview")
         print("  ✓ 00-overview.png", flush=True)
 
+        # 10 反思与下一轮 —— auto research 的主循环，README 需要这张图
+        #   才能说明「跑完一轮不是结束」。
+        pg.evaluate("""(d) => {
+            handle({kind:'await_input',stage:'done',
+                message:'是否按此方向开始下一轮研究',
+                payload:{next:'next_round',proposal:d.proposal,
+                    can_extend:true,round_no:1,max_rounds:4,
+                    rounds:d.rounds||[],n_factor_trials:d.n_factor_trials||0}});
+        }""", {"proposal": fx["proposal"], "rounds": fx["rounds"],
+               "n_factor_trials": fx["n_factor_trials"]})
+        pg.wait_for_timeout(450)
+        snap("10-reflect", step="done", panel="#pNext")
+
         # 9 灵感池
         pg.evaluate("""(items) => {
             document.querySelector('#cardFeeds').classList.remove('hidden');

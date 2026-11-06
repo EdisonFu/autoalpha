@@ -210,3 +210,29 @@ DEMO_EXT_EVALS = [
 DEMO_USAGE = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
               "total_tokens": 0, "cost_usd": 0.0, "priced": False,
               "model": "(demo)", "by_purpose": {}}
+
+
+# 反思与下一轮。演示必须覆盖这一步 —— auto research 的主循环在这里，
+# 只演示线性流程会让用户以为项目跑完一轮就结束。
+DEMO_PROPOSAL = {
+    "learned": "截面动量在A股ETF上有效但换手偏高；短期反转因子IC虽显著，"
+               "分层单调性却为负，最高分位反而最差，说明IC与可交易性脱节。",
+    "next_direction_zh": "低换手的中长周期动量：用波动率缩放与更长回看窗口"
+                         "降低换手，同时保持截面单调性",
+    "canonical_en": "low turnover momentum volatility scaling ETF",
+    "avoid": ["依赖宏观或基本面序列的信号（本数据集只有行情）",
+              "仅凭IC/ICIR筛选因子，不看分层单调性",
+              "短窗口高频信号，换手会超标"],
+    "rationale": "本轮唯一的通过因子受换手约束，而失败因子暴露的是"
+                 "「IC显著但不可交易」这一结构性问题，因此下一轮应直接"
+                 "优化换手与单调性，而非继续堆叠同类动量变体。",
+}
+
+DEMO_ROUNDS = [
+    {"round": 1, "query": "cross-sectional momentum exchange-traded fund",
+     "n_specs": 2, "n_evals": 6, "n_pass": 3,
+     "failures": [{"factor": "etf_reversal_overlay", "status": "FAIL_IS",
+                   "reason": "单调性=-0.30，最高分位最差"},
+                  {"factor": "etf_volume_weighted_momentum",
+                   "status": "FAIL_IS", "reason": "多空Sharpe=0.31 < 0.5"}]},
+]
