@@ -473,7 +473,7 @@ def data_sources():
     reg = _registry()
     return {"sources": reg.status(), "active": reg.active(),
             "klines_dir": os.environ.get("AUTOALPHA_KLINES", "")
-                          or "(默认) factor-signal/data/klines"}
+                          or f"(默认) {DEFAULT_KLINES}"}
 
 
 @app.post("/api/data/sources")
@@ -513,7 +513,7 @@ def data_dir_set(req: KlinesDirReq):
     if not path:
         os.environ.pop("AUTOALPHA_KLINES", None)
         _reset_data_cache()
-        return {"ok": True, "klines_dir": "(默认) factor-signal/data/klines"}
+        return {"ok": True, "klines_dir": f"(默认) {DEFAULT_KLINES}"}
 
     if not os.path.isdir(path):
         raise HTTPException(422, f"目录不存在: {path}")
