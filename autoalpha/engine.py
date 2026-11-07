@@ -162,6 +162,21 @@ class SplitEngine:
                   f"这不是「因子都无效」，而是样本太窄。"
                   f"请扩充到 ≥10 只（建议 ≥20），或换更宽的数据集。")
         f = self._clip(factor, self.price_is)
+        # 因子侧的列数检查：因子输出的标的少于行情截面时（如聚类只保留
+        # 代表标的），join 后大面积对不上，coverage 塌到 0 —— 看起来像
+        # 「因子无信号」，真因是覆盖不全。行情侧的窄截面警告管不到这里。
+        try:
+            f_syms = set(f.index.get_level_values(-1).unique())
+            n_valid = len(f_syms & set(self.price_is.columns))
+            if n_valid < len(self.price_is.columns) * 0.5 and not getattr(
+                    self, "_factor_cover_warned", False):
+                self._factor_cover_warned = True
+                print(f"[Engine] ⚠ 因子只覆盖 {n_valid}/"
+                      f"{len(self.price_is.columns)} 个标的 —— "
+                      f"coverage 会塌向 0。若因子设计上只选部分标的"
+                      f"（如聚类代表），需改为对全体标的输出值。")
+        except Exception:
+            pass
         ic = compute_ic_metrics(f, self.price_is)
         lm, ls_nav = evaluate_layers(f, self.price_is, self.n_quantiles,
                                      self.rebalance, self.cost_bps)
