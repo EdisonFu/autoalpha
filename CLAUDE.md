@@ -197,6 +197,15 @@ auto research 是 loop：每轮结束由 `research_loop_agent` 读失败原因�
 曾因服务端日志里没有某条消息就断定「并发没触发」。
 那是 `FlowEvent`（走 SSE），本来就不落在 stdout。证据来源用错了。
 
+### 测试全绿 ≠ 接线正确：mock 掉被测对象本身就白测
+
+一次把顶层函数插进类体中间，把后面的类方法挤成了模块函数里的
+不可达死代码——文件能 import、pyflakes 零告警、260 条测试全过，
+而真实运行第一步就 `AttributeError`。因为所有测试都 mock 掉了
+`implement()`，没有一条真跑过沙箱路径。
+→ 关键入口至少留一条「mock LLM 但真跑 subprocess」的测试
+（见 tests/test_implement_real.py），专抓接线类断裂。
+
 ### 批量清理 import：不要用行号驱动的手写脚本
 
 一次清理把文件搞坏三轮：行号在删除中漂移（删了 `load_klines`、
