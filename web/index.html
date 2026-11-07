@@ -190,6 +190,9 @@ code{font-family:var(--mono);font-size:11px;background:#0d1320;padding:1px 5px;
   background:linear-gradient(90deg,rgba(245,158,11,.18),rgba(124,92,255,.18));
   border-bottom:1px solid rgba(245,158,11,.3);color:var(--fg);
   backdrop-filter:blur(8px)}
+.demoClose{margin-left:12px;padding:0 7px;border:none;background:transparent;
+  color:var(--fg2);font-size:18px;line-height:1;cursor:pointer;border-radius:4px}
+.demoClose:hover{color:var(--fg);background:rgba(255,255,255,.1)}
 
 /* 顶栏配置按钮 */
 .iconbtn{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;font-size:12.5px}
@@ -1282,12 +1285,24 @@ async function checkDemo(){
     const h=await (await fetch('/api/health')).json();
     if(!h.demo)return;
     const d=await (await fetch('/api/demo')).json();
+    let closed=false;
+    try{closed=sessionStorage.getItem('demoBarClosed')==='1'}catch(e){}
+    if(closed){window.__demo=d;return}
     document.body.insertAdjacentHTML('afterbegin',
       `<div class="demobar">${esc(d.banner)}
         <button class="ghost" style="padding:5px 12px;font-size:11.5px;margin-left:10px"
-          onclick="playDemo()">播放演示</button></div>`);
+          onclick="playDemo()">播放演示</button>
+        <button class="demoClose" onclick="closeDemoBar()" title="关闭提示（本次会话不再显示）">×</button>
+      </div>`);
     window.__demo=d;
   }catch(e){}
+}
+
+function closeDemoBar(){
+  const b=document.querySelector('.demobar');
+  if(b)b.remove();
+  // 会话内记住关闭：演示提示关掉一次就够了，不该每次刷新都回来
+  try{sessionStorage.setItem('demoBarClosed','1')}catch(e){}
 }
 
 /** 按真实事件顺序重放一轮流程，让人看懂每一步在做什么 */
