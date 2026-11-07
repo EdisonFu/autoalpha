@@ -150,6 +150,17 @@ class SplitEngine:
 
     def evaluate_is(self, factor: pd.Series) -> Tuple[ICMetrics, LayerMetrics, pd.Series]:
         """搜索/修复循环只能调这个。"""
+        # 截面不足时必须说人话。compute_ic_metrics 要求每天 ≥10 只有效标的
+        # 才算 IC，否则逐日 continue、base 为空、返回全 0 —— 用户看到的是
+        # 「所有因子都失败」，而真因是「标的太少，IC 根本算不出来」。
+        # 静默返回 0 违反「失败必须可见」。
+        w = self.width("is")
+        if w < 10 and not getattr(self, "_narrow_warned", False):
+            self._narrow_warned = True
+            print(f"[Engine] ⚠ 截面宽度中位仅 {w:.0f} 只（<10）："
+                  f"每日有效标的不足 10 个时 IC 无法计算，会全部返回 0。"
+                  f"这不是「因子都无效」，而是样本太窄。"
+                  f"请扩充到 ≥10 只（建议 ≥20），或换更宽的数据集。")
         f = self._clip(factor, self.price_is)
         ic = compute_ic_metrics(f, self.price_is)
         lm, ls_nav = evaluate_layers(f, self.price_is, self.n_quantiles,
