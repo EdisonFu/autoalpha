@@ -7,6 +7,7 @@ import tempfile
 from typing import Optional, Tuple
 from ..llm import LLMClient
 from ..utils import strip_code_fence
+from ._contract import enforce_main_contract
 from ..pipeline_state import FactorSpec
 
 
@@ -207,6 +208,7 @@ class FactorImplementAgent:
         error_context: previous error or eval failure — triggers targeted repair.
         """
         code = self._generate_code(spec, data, error_context, experience_context)
+        code = enforce_main_contract(code)
 
         # Lookahead bias warning (non-blocking, informational)
         warnings = self._check_lookahead_bias(code)
@@ -258,6 +260,14 @@ class FactorImplementAgent:
         if not os.path.exists(csv_path):
             return None, ("ERROR: 打印了 FACTOR_OK 但 CSV 文件不存在，"
                           f"检查是否写到了 sys.argv[2] 指定的路径: {csv_path}")
+
+        # 输出形状校验。rc=0 + FACTOR_OK 只说明「跑完了」，不代表「形状对」。
+        # 实测一类：LLM 让 compute_factor 返回【单日截面】而非全历史
+        # MultiIndex (date, symbol)，CSV 只有 10 行单列 —— 回测会拿它当
+        # 时间序列用，结果全是噪声。必须在实现阶段就拦住并给出精确提示。
+        shape_err = _check_factor_csv(csv_path)
+        if shape_err:
+            return None, f"ERROR: {shape_err}"
 
         return csv_path, None
 
@@ -327,6 +337,40 @@ class FactorImplementAgent:
                     user="\n".join(base_parts), temperature=0.7,
                     purpose="codegen")
             )
+
+
+def _check_factor_csv(csv_path: str) -> str:
+    """
+    校验因子 CSV 的形状契约：MultiIndex (date, symbol) + factor_value，
+    且要有足够的历史行数。
+
+    返回 "" 表示合格，否则返回给修复轮次的具体说明。
+    """
+    import pandas as _pd
+    try:
+        df = _pd.read_csv(csv_path)
+    except Exception as e:
+        return f"因子 CSV 无法解析: {e}"
+    if df.empty:
+        return "因子 CSV 为空 —— compute_factor 没有产出任何值"
+    cols = [c.lower() for c in df.columns]
+    has_date = any("date" in c for c in cols)
+    has_sym = any(c in ("symbol", "stock", "code", "ticker", "asset",
+                        "instrument") for c in cols)
+    has_val = any("factor" in c or "value" in c for c in cols)
+    if not (has_date and has_sym and has_val):
+        return (
+            f"输出形状不符合契约：需要 (date, symbol, factor_value) 三列"
+            f"（MultiIndex Series.stack() 的结果），实际列为 {list(df.columns)}，"
+            f"共 {len(df)} 行。compute_factor 应返回全历史的 "
+            f"MultiIndex(date, symbol) 序列（对每个交易日、每个标的各一个值），"
+            f"而不是单日截面或 dict。把逐日结果拼成 wide DataFrame 后 "
+            f"wide.stack() 再 to_csv。"
+        )
+    if len(df) < 50:
+        return (f"因子历史过短：仅 {len(df)} 行。应为全历史每个交易日、"
+                f"每个标的各一行（通常数千行以上）。检查是否只算了最后一天。")
+    return ""
 
     @staticmethod
     def _check_lookahead_bias(code: str) -> list:
