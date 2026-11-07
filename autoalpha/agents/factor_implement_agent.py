@@ -271,6 +271,17 @@ class FactorImplementAgent:
 
         return csv_path, None
 
+    @staticmethod
+    def _check_lookahead_bias(code: str) -> list:
+        """Detect common lookahead bias patterns. Returns list of warning strings."""
+        warnings = []
+        if re.search(r'shift\s*\(\s*-[1-9]', code):
+            warnings.append("shift(-N) 可能引入前瞻偏差（除非用于计算前向收益）")
+        if re.search(r'pct_change\s*\([^)]*\)\s*(?!.*shift)', code):
+            # pct_change without subsequent shift — might be used directly as feature
+            pass  # Too noisy, skip
+        return warnings
+
     # ── internals ──────────────────────────────────────────────────────────────
 
     def _generate_code(self, spec: FactorSpec, data: dict,
@@ -372,13 +383,3 @@ def _check_factor_csv(csv_path: str) -> str:
                 f"每个标的各一行（通常数千行以上）。检查是否只算了最后一天。")
     return ""
 
-    @staticmethod
-    def _check_lookahead_bias(code: str) -> list:
-        """Detect common lookahead bias patterns. Returns list of warning strings."""
-        warnings = []
-        if re.search(r'shift\s*\(\s*-[1-9]', code):
-            warnings.append("shift(-N) 可能引入前瞻偏差（除非用于计算前向收益）")
-        if re.search(r'pct_change\s*\([^)]*\)\s*(?!.*shift)', code):
-            # pct_change without subsequent shift — might be used directly as feature
-            pass  # Too noisy, skip
-        return warnings
